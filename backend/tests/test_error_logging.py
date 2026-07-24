@@ -48,3 +48,60 @@ def test_error_no_manejado_es_500_sin_filtrar_internals(monkeypatch):
     assert res.status_code == 500
     assert res.json() == {"detail": "Error interno"}
     assert "secreto" not in res.text
+
+
+# --- CORS en respuestas de error ---------------------------------------------
+# Regresión de un incidente real: el 500 salía del ServerErrorMiddleware, que
+# está por fuera del CORSMiddleware, así que llegaba sin Access-Control-Allow-
+# Origin. El navegador lo bloqueaba y el front veía un TypeError de red en vez
+# del 500 → no podía ni mostrar el ErrorState. El orden de los middlewares en
+# api/main.py depende de esto: no mover el add_middleware(CORSMiddleware).
+
+ORIGIN = {"Origin": "http://localhost:5173"}
+
+
+def test_500_lleva_headers_de_cors(monkeypatch):
+    def _boom():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(main.pool, "connection", _boom)
+    res = client.get("/carreras", headers=ORIGIN)
+    assert res.status_code == 500
+    assert res.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+@pytest.mark.parametrize(
+    "path,status",
+    [
+        ("/ruta-que-no-existe", 404),  # HTTPException handler
+        ("/client-errors", 405),       # method not allowed (GET a un POST)
+    ],
+)
+def test_errores_http_llevan_headers_de_cors(path, status):
+    res = client.get(path, headers=ORIGIN)
+    assert res.status_code == status
+    assert res.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+def test_422_lleva_headers_de_cors():
+    res = client.post("/client-errors", json={"message": "sin kind"}, headers=ORIGIN)
+    assert res.status_code == 422
+    assert res.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+def test_preflight_sigue_funcionando():
+    res = client.options(
+        "/me",
+        headers={
+            **ORIGIN,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+    assert res.status_code == 200
+    assert res.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+def test_origen_no_permitido_no_recibe_header():
+    res = client.get("/ruta-que-no-existe", headers={"Origin": "https://evil.example"})
+    assert "access-control-allow-origin" not in res.headers

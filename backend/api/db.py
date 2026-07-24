@@ -18,5 +18,12 @@ pool = ConnectionPool(
     # explícito para que el cliente reciba 500 rápido en vez de colgar
     # 30s (default de psycopg-pool). Métricas en Render lo hacen visible.
     timeout=5.0,
+    # En Vercel la instancia se congela entre invocaciones y Neon corta las
+    # conexiones ociosas; los workers de mantenimiento del pool también quedan
+    # congelados, así que nadie se entera. Sin `check`, la primera query tras el
+    # descongelamiento agarra una conexión muerta y revienta con
+    # "SSL connection has been closed unexpectedly". Con `check` el pool valida
+    # en el checkout (un round-trip vacío) y reemplaza la conexión muerta.
+    check=ConnectionPool.check_connection,
     open=False,
 )

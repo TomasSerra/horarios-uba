@@ -99,14 +99,8 @@ if (_app_url := os.environ.get("APP_URL")) and _app_url not in _allowed_origins:
     _allowed_origins.append(_app_url.rstrip("/"))
 
 app.add_middleware(GZipMiddleware, minimum_size=500)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_allowed_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# OJO: el CORSMiddleware se agrega MÁS ABAJO, después de `log_unhandled`, para
+# que quede por fuera de él. Ver el comentario ahí.
 
 app.include_router(me_router)
 app.include_router(pagos_router, prefix="/pagos")
@@ -119,6 +113,11 @@ app.include_router(reviews_router, prefix="/catedras")
 def _req_id(request: Request) -> str:
     # Vercel inyecta un id por invocación; sirve para correlacionar en los logs.
     return request.headers.get("x-vercel-id", "-")
+
+
+def _error_500() -> JSONResponse:
+    # Sin detalle interno: el stack ya quedó en los logs.
+    return JSONResponse(status_code=500, content={"detail": "Error interno"})
 
 
 @app.middleware("http")
@@ -143,7 +142,26 @@ async def log_unhandled(request: Request, call_next):
             exc,
             exc_info=True,
         )
-        raise
+        # Devolvemos la respuesta acá en vez de re-lanzar: si la excepción sube,
+        # el 500 lo arma el ServerErrorMiddleware de Starlette, que está por
+        # FUERA del CORSMiddleware → sale sin Access-Control-Allow-Origin y el
+        # navegador la bloquea (el front ve un TypeError de red en vez de un 500
+        # y no puede ni mostrar el error). Cortando acá, la respuesta pasa por
+        # CORS y llega legible.
+        return _error_500()
+
+
+# Se agrega DESPUÉS de `log_unhandled` a propósito: Starlette apila cada
+# middleware por fuera del anterior, así que el último agregado es el más
+# externo. CORS tiene que envolver a `log_unhandled` para que TODA respuesta
+# —incluidos los 500— salga con los headers de CORS.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -179,9 +197,11 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    # Ya logueado con stack+contexto en `log_unhandled`; acá solo formamos la
-    # respuesta sin filtrar el detalle interno al cliente.
-    return JSONResponse(status_code=500, content={"detail": "Error interno"})
+    # Red de seguridad: hoy `log_unhandled` corta todo antes y devuelve el 500,
+    # así que acá solo caería algo que explote en el propio CORSMiddleware. Esa
+    # respuesta no lleva headers de CORS (sale del ServerErrorMiddleware), pero
+    # es preferible a un 502 del runtime.
+    return _error_500()
 
 
 @app.post("/client-errors", status_code=204)

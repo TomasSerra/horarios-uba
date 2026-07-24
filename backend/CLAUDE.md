@@ -86,7 +86,7 @@ API en **Vercel** (Free) como FastAPI serverless ([docs](https://vercel.com/docs
 | POST | `/pagos/webhook` | — | Webhook de MP (valida firma `MP_WEBHOOK_SECRET`). |
 | GET/POST/DELETE | `/favoritos` | `current_user` | CRUD; gateado a Pro adentro. |
 
-CORS: `localhost:5173` y `localhost:3000`. Sumar nuevos orígenes (Vercel) en [api/main.py:65-69](api/main.py).
+CORS: `localhost:5173` y `localhost:3000` + `APP_URL`. Sumar nuevos orígenes en `_allowed_origins` ([api/main.py](api/main.py)). **El `add_middleware(CORSMiddleware, ...)` va después de `log_unhandled` a propósito** (Starlette apila el último agregado como el más externo): si CORS queda adentro, los 500 salen sin `Access-Control-Allow-Origin`, el navegador los bloquea y el front ve un `TypeError` de red en vez del error. Cubierto por `tests/test_error_logging.py`.
 
 ## Auth (firebase-admin)
 
