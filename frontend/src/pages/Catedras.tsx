@@ -242,7 +242,7 @@ export function Catedras() {
 
         {showSkeleton && (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {Array.from({ length: 14 }).map((_, i) => (
+            {Array.from({ length: 16 }).map((_, i) => (
               <Skeleton key={i} className="h-[64px] w-full rounded-2xl" />
             ))}
           </div>

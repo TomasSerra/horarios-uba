@@ -118,10 +118,10 @@ function FavoritoCard({
             }
           />
           <div className="min-w-0 flex-1">
-            <PlanLeyenda plan={fav.plan} />
-            <p className="mt-2 text-xs text-muted-foreground">
+            <p className="mb-2 text-xs text-muted-foreground">
               Guardado el {formatFecha(fav.created_at)}
             </p>
+            <PlanLeyenda plan={fav.plan} />
             {chips.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {chips.map((c) => (

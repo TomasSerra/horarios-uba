@@ -647,8 +647,8 @@ class TestListCatedras:
         list_catedras(carrera="c", q="giordano", sort="mas_resenas", page=3)
         sql, params = fake_conn.executed[0]
         assert "COUNT(r.id) DESC" in sql  # order de mas_resenas
-        assert params["offset"] == 28  # (3-1) * RANK_PAGE_SIZE (14)
-        assert params["limit"] == 14
+        assert params["offset"] == 32  # (3-1) * RANK_PAGE_SIZE (16)
+        assert params["limit"] == 16
         assert params["pattern"] == "%giordano%"
 
     def test_busqueda_ignora_tildes_y_mayusculas(

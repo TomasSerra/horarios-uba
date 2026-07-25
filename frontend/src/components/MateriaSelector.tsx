@@ -71,7 +71,6 @@ export function MateriaSelector({ selected, onChange }: Props) {
   const [popoverWidth, setPopoverWidth] = useState<number | null>(null);
   const [rowHeight, setRowHeight] = useState(0);
   const [isWide, setIsWide] = useState(false);
-  const drawerInputRef = useRef<HTMLInputElement>(null);
 
   // Scroll al tope cada vez que cambia el query. En un useEffect (no en
   // onValueChange) para correr DESPUÉS de que cmdk filtró y reordenó.
@@ -111,15 +110,6 @@ export function MateriaSelector({ selected, onChange }: Props) {
     mq.addEventListener("change", update);
     return () => mq.removeEventListener("change", update);
   }, []);
-
-  useEffect(() => {
-    if (!drawerOpen) return;
-
-    const id = window.requestAnimationFrame(() => {
-      drawerInputRef.current?.focus({ preventScroll: true });
-    });
-    return () => window.cancelAnimationFrame(id);
-  }, [drawerOpen]);
 
   // Se incrementa en cada carga; ignoramos respuestas de cargas ya superadas
   // (cambio de carrera o reintento) para no pisar el estado con data vieja.
@@ -199,7 +189,6 @@ export function MateriaSelector({ selected, onChange }: Props) {
       )}
     >
       <CommandInput
-        ref={drawer ? drawerInputRef : undefined}
         placeholder="Buscar materia..."
         className={cn("pr-12 wide:pr-0", drawer && "text-base")}
         onValueChange={setQuery}
@@ -315,6 +304,9 @@ export function MateriaSelector({ selected, onChange }: Props) {
         </Popover>
         <DrawerContent
           showHandle={false}
+          // Sin autofocus: si enfocamos el input, el teclado virtual salta y
+          // tapa media pantalla antes de que el usuario decida si va a buscar.
+          onOpenAutoFocus={(e) => e.preventDefault()}
           className="h-[calc(100dvh-16px)] max-h-[calc(100dvh-16px)] overflow-hidden rounded-t-2xl border-0"
         >
           <div className="relative flex min-h-0 flex-1 flex-col">

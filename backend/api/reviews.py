@@ -16,7 +16,7 @@ router = APIRouter()
 # Página de reseñas (detalle) y ranking (listado). El listado muestra menos por
 # página porque cada card es chica.
 PAGE_SIZE = 10
-RANK_PAGE_SIZE = 14
+RANK_PAGE_SIZE = 16
 # Free (anónimo o sin Pro) solo ve las primeras N reseñas de una cátedra; el
 # resto queda detrás del paywall.
 FREE_REVIEW_LIMIT = 5

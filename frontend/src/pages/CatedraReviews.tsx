@@ -141,9 +141,10 @@ function ReviewCard({ review }: { review: ReviewItem }) {
   );
 }
 
-// Sección de profesores: ordenados por estrellas (desc), clampeada a 2 filas
-// con un botón "Ver todos". La altura de 2 filas se mide en runtime (los chips
-// wrapean según el ancho, así que no hay un count fijo de columnas).
+// Sección de profesores: ordenados por estrellas (desc), clampeada a 2 filas y
+// media (la 3ra se corta al medio con un difuminado, para que se lea que hay
+// más) con un botón "Ver todos". La altura se mide en runtime: los chips
+// wrapean según el ancho, así que no hay un count fijo de columnas.
 function ProfesoresFilter({
   profesores,
   selected,
@@ -155,7 +156,7 @@ function ProfesoresFilter({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(false);
-  // Altura (px) del bloque de 2 filas; null = no hace falta clampear (≤2 filas).
+  // Altura (px) del bloque de 2 filas y media; null = no hace falta clampear.
   const [collapsedHeight, setCollapsedHeight] = useState<number | null>(null);
 
   const ordenados = useMemo(() => {
@@ -186,9 +187,12 @@ function ProfesoresFilter({
         (a, b) => a - b
       );
       if (tops.length <= 2) return setCollapsedHeight(null);
-      // Bottom de la 2da fila = chip más bajo entre los de las 2 primeras filas.
-      const dosFilas = rects.filter((r) => r.top <= tops[1]);
-      setCollapsedHeight(Math.max(...dosFilas.map((r) => r.bottom)));
+      // Cortamos a mitad de la 3ra fila. tops[2] ya incluye el gap, así que
+      // alcanza con sumarle media altura de los chips de esa fila.
+      const tercerFila = rects.filter((r) => r.top === tops[2]);
+      const altoTercerFila =
+        Math.max(...tercerFila.map((r) => r.bottom)) - tops[2];
+      setCollapsedHeight(tops[2] + altoTercerFila / 2);
     };
     measure();
     const ro = new ResizeObserver(measure);
@@ -203,47 +207,52 @@ function ProfesoresFilter({
       <h3 className="text-sm font-semibold tracking-tight">
         Profesores con reseñas
       </h3>
-      <div
-        ref={containerRef}
-        className="flex flex-col gap-2 overflow-hidden sm:flex-row sm:flex-wrap"
-        style={clamp ? { maxHeight: collapsedHeight! } : undefined}
-      >
-        {ordenados.map((p) => {
-          const isSel = selected === p.profesor;
-          return (
-            <button
-              key={p.profesor}
-              type="button"
-              aria-pressed={isSel}
-              onClick={() => onSelect(isSel ? null : p.profesor)}
-              className={cn(
-                "flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left transition-colors sm:w-auto",
-                isSel
-                  ? "border-primary bg-primary/10"
-                  : "border-border bg-white hover:border-primary/40 hover:bg-accent/40"
-              )}
-            >
-              {isSel && <Check className="size-4 shrink-0 text-primary" />}
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium">{p.profesor}</p>
-                <div className="mt-0.5 flex items-center gap-1.5">
-                  <StarRating
-                    value={p.avg_rating ?? 0}
-                    size={12}
-                    className="shrink-0"
-                  />
-                  <span className="text-[11px] text-muted-foreground">
-                    {p.review_count > 0
-                      ? `${p.avg_rating?.toFixed(1)} · ${p.review_count} ${
-                          p.review_count === 1 ? "reseña" : "reseñas"
-                        }`
-                      : "Sin reseñas"}
-                  </span>
+      <div className="relative">
+        <div
+          ref={containerRef}
+          className="flex flex-col gap-2 overflow-hidden sm:flex-row sm:flex-wrap"
+          style={clamp ? { maxHeight: collapsedHeight! } : undefined}
+        >
+          {ordenados.map((p) => {
+            const isSel = selected === p.profesor;
+            return (
+              <button
+                key={p.profesor}
+                type="button"
+                aria-pressed={isSel}
+                onClick={() => onSelect(isSel ? null : p.profesor)}
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left transition-colors sm:w-auto",
+                  isSel
+                    ? "border-primary bg-primary/10"
+                    : "border-border bg-white hover:border-primary/40 hover:bg-accent/40"
+                )}
+              >
+                {isSel && <Check className="size-4 shrink-0 text-primary" />}
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">{p.profesor}</p>
+                  <div className="mt-0.5 flex items-center gap-1.5">
+                    <StarRating
+                      value={p.avg_rating ?? 0}
+                      size={12}
+                      className="shrink-0"
+                    />
+                    <span className="text-[11px] text-muted-foreground">
+                      {p.review_count > 0
+                        ? `${p.avg_rating?.toFixed(1)} · ${p.review_count} ${
+                            p.review_count === 1 ? "reseña" : "reseñas"
+                          }`
+                        : "Sin reseñas"}
+                    </span>
+                  </div>
                 </div>
-              </div>
-            </button>
-          );
-        })}
+              </button>
+            );
+          })}
+        </div>
+        {clamp && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-background to-transparent" />
+        )}
       </div>
       {collapsedHeight != null && (
         <button
