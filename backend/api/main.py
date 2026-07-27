@@ -226,10 +226,12 @@ async def report_client_error(report: ClientErrorReport, request: Request):
     return Response(status_code=204)
 
 
-# Datos servidos por el scraper diario (06:00 UTC) son estáticos durante el día.
-# `stale-while-revalidate` permite al CDN/browser servir desde cache 24h más
-# mientras revalida en background.
-_STATIC_CACHE = "public, max-age=3600, stale-while-revalidate=86400"
+# Datos servidos por el scraper diario (06:00 UTC), estables durante el día.
+# Fresco 20 min y hasta 40 min más sirviendo stale mientras revalida en
+# background: ventana total de 1 hora. Antes era 1h + 24h, pero ese colchón
+# largo hace que un cambio de shape del payload (agregar un campo que el FE
+# necesita) quede invisible por un día entero después del deploy.
+_STATIC_CACHE = "public, max-age=1200, stale-while-revalidate=2400"
 
 
 def _set_static_cache(response: Response) -> None:
@@ -256,6 +258,8 @@ def list_carreras(response: Response) -> list[Carrera]:
     _set_static_cache(response)
     # `sedes` se computa desde `cursos.sede` para que el FE filtre el panel
     # de sedes y el dropdown por materia a sólo las que existen en la carrera.
+    # Sólo cátedras vigentes: una sede que este cuatrimestre no se usa no debe
+    # ofrecerse como filtro.
     sql = """
         SELECT
             c.slug,
@@ -267,7 +271,7 @@ def list_carreras(response: Response) -> list[Carrera]:
             ) AS sedes
         FROM carreras c
         LEFT JOIN materias m  ON m.carrera = c.slug
-        LEFT JOIN catedras ca ON ca.materia_codigo = m.codigo
+        LEFT JOIN catedras ca ON ca.materia_codigo = m.codigo AND ca.vigente
         LEFT JOIN cursos cu   ON cu.catedra_id = ca.id
         GROUP BY c.slug, c.nombre, c.sort_order
         ORDER BY c.sort_order, c.nombre
@@ -284,8 +288,13 @@ def list_materias(
     carrera: str | None = Query(None, description="Slug de carrera"),
 ) -> list[MateriaListItem]:
     _set_static_cache(response)
+    # Se devuelven todas las materias, incluidas las que ya no se dictan: el
+    # buscador de reseñas las necesita. `cant_catedras_vigentes` es lo que mira
+    # el selector del armador de planes para ocultar las que están en 0.
     sql = """
-        SELECT m.codigo, m.nombre, COUNT(c.id) AS cant_catedras
+        SELECT m.codigo, m.nombre,
+               COUNT(c.id) AS cant_catedras,
+               COUNT(c.id) FILTER (WHERE c.vigente) AS cant_catedras_vigentes
           FROM materias m
           LEFT JOIN catedras c ON c.materia_codigo = m.codigo
          WHERE (%(pattern)s::text IS NULL OR m.nombre ILIKE %(pattern)s)
@@ -314,7 +323,7 @@ def get_materia(codigo: int, response: Response) -> MateriaDetail:
             raise HTTPException(status_code=404, detail="Materia no encontrada")
         catedras = conn.execute(
             """
-            SELECT id, numero, titular, cuatrimestre
+            SELECT id, numero, titular, cuatrimestre, vigente
               FROM catedras
              WHERE materia_codigo = %s
              ORDER BY id
@@ -332,7 +341,11 @@ def get_materia(codigo: int, response: Response) -> MateriaDetail:
 def get_materia_opciones(codigo: int, response: Response) -> MateriaOpciones:
     """Devuelve la materia con sus cátedras y, para cada una, los profesores
     únicos que dictan comisiones (datos necesarios para que el FE permita
-    elegir cátedra y filtrar por profesores antes de armar planes)."""
+    elegir cátedra y filtrar por profesores antes de armar planes).
+
+    Incluye cátedras no vigentes (con `vigente=False`): este endpoint también lo
+    consume el diálogo de reseñas, que debe poder reseñar cátedras que ya no se
+    dictan. El armador de planes filtra por `vigente` del lado del FE."""
     _set_static_cache(response)
     with pool.connection() as conn:
         materia = conn.execute(
@@ -346,7 +359,7 @@ def get_materia_opciones(codigo: int, response: Response) -> MateriaOpciones:
         # y romper los array_agg/jsonb_agg de profesores y comisiones.
         rows = conn.execute(
             """
-            SELECT ca.id, ca.numero, ca.titular, ca.cuatrimestre,
+            SELECT ca.id, ca.numero, ca.titular, ca.cuatrimestre, ca.vigente,
                    COALESCE(
                        array_agg(DISTINCT cu.profesor)
                          FILTER (WHERE cu.profesor IS NOT NULL),
@@ -365,7 +378,7 @@ def get_materia_opciones(codigo: int, response: Response) -> MateriaOpciones:
               FROM catedras ca
               LEFT JOIN cursos cu ON cu.catedra_id = ca.id AND cu.tipo = 'comision'
              WHERE ca.materia_codigo = %s
-             GROUP BY ca.id, ca.numero, ca.titular, ca.cuatrimestre
+             GROUP BY ca.id, ca.numero, ca.titular, ca.cuatrimestre, ca.vigente
              ORDER BY ca.id
             """,
             (codigo,),
@@ -402,6 +415,7 @@ def get_materia_opciones(codigo: int, response: Response) -> MateriaOpciones:
                 numero=r["numero"],
                 titular=r["titular"],
                 cuatrimestre=r["cuatrimestre"],
+                vigente=r["vigente"],
                 profesores=sorted(r["profesores"]),
                 comisiones=[ComisionOpcion(**c) for c in r["comisiones"]],
                 avg_rating=(
@@ -421,7 +435,7 @@ def get_catedra(catedra_id: int, response: Response) -> CatedraDetail:
         catedra = conn.execute(
             """
             SELECT c.id, c.materia_codigo, m.nombre AS materia_nombre,
-                   c.numero, c.titular, c.cuatrimestre
+                   c.numero, c.titular, c.cuatrimestre, c.vigente
               FROM catedras c
               JOIN materias m ON m.codigo = c.materia_codigo
              WHERE c.id = %s

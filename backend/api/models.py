@@ -45,6 +45,7 @@ class CatedraSummary(BaseModel):
     numero: str | None = None
     titular: str | None = None
     cuatrimestre: str | None = None
+    vigente: bool = True
 
 
 class CatedraDetail(BaseModel):
@@ -54,13 +55,19 @@ class CatedraDetail(BaseModel):
     numero: str | None = None
     titular: str | None = None
     cuatrimestre: str | None = None
+    vigente: bool = True
     cursos: list[CursoResponse]
 
 
 class MateriaListItem(BaseModel):
     codigo: int
     nombre: str
+    # Total histórico de cátedras. Lo consume el buscador de reseñas, que debe
+    # seguir encontrando materias que ya no se dictan.
     cant_catedras: int
+    # Cátedras que se dictan este cuatrimestre. El selector del armador de planes
+    # usa este; en 0 la materia no se ofrece y se oculta de esa lista.
+    cant_catedras_vigentes: int = 0
 
 
 class MateriaDetail(BaseModel):
@@ -79,6 +86,9 @@ class CatedraOpcion(BaseModel):
     numero: str | None = None
     titular: str | None = None
     cuatrimestre: str | None = None
+    # Se dicta este cuatrimestre. El endpoint devuelve vigentes y no vigentes
+    # (el diálogo de reseñas necesita las discontinuadas); filtra cada consumidor.
+    vigente: bool = True
     profesores: list[str]  # profesores únicos de las comisiones de esta cátedra
     comisiones: list[ComisionOpcion]  # tuplas (profesor, sede) de sus comisiones
     # Reseñas de la cátedra (para mostrar estrellas en el selector del planner).

@@ -47,15 +47,21 @@ def upsert_catedra(
     titular: str | None,
     cuatrimestre: str | None,
 ) -> None:
+    # Verla en la fuente la marca vigente: una cátedra que se dejó de dictar y
+    # vuelve el cuatrimestre siguiente se reactiva sola, sin intervención.
     conn.execute(
         """
-        INSERT INTO catedras (id, materia_codigo, numero, titular, cuatrimestre)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO catedras (
+            id, materia_codigo, numero, titular, cuatrimestre, vigente, last_seen_at
+        )
+        VALUES (%s, %s, %s, %s, %s, TRUE, NOW())
         ON CONFLICT (id) DO UPDATE SET
             materia_codigo = EXCLUDED.materia_codigo,
             numero         = EXCLUDED.numero,
             titular        = EXCLUDED.titular,
-            cuatrimestre   = EXCLUDED.cuatrimestre
+            cuatrimestre   = EXCLUDED.cuatrimestre,
+            vigente        = TRUE,
+            last_seen_at   = NOW()
         """,
         (catedra_id, materia_codigo, numero, titular, cuatrimestre),
     )
@@ -129,6 +135,53 @@ def resolve_obligatorio(conn: psycopg.Connection, catedra_id: int) -> None:
         """,
         (catedra_id,),
     )
+
+
+def contar_vigentes(conn: psycopg.Connection) -> int:
+    row = conn.execute("SELECT COUNT(*) FROM catedras WHERE vigente").fetchone()
+    return row[0] if row else 0
+
+
+def listar_a_dar_de_baja(
+    conn: psycopg.Connection, vistas: Iterable[int]
+) -> list[tuple[int, str | None]]:
+    """Cátedras vigentes que no aparecieron en el índice de esta corrida.
+
+    Sólo para el reporte del --dry-run-sweep; el sweep real no la necesita.
+    """
+    ids = list(vistas)
+    if not ids:
+        return []
+    rows = conn.execute(
+        """
+        SELECT ca.id, m.nombre
+          FROM catedras ca
+          JOIN materias m ON m.codigo = ca.materia_codigo
+         WHERE ca.vigente AND ca.id <> ALL(%s)
+         ORDER BY ca.id
+        """,
+        (ids,),
+    ).fetchall()
+    return [(r[0], r[1]) for r in rows]
+
+
+def dar_de_baja_no_vistas(conn: psycopg.Connection, vistas: Iterable[int]) -> int:
+    """Marca `vigente = FALSE` las cátedras que no figuran en el índice actual.
+
+    No borra nada: los cursos quedan en la DB para que las reseñas de esa cátedra
+    (incluida la validación del profesor) sigan funcionando. Revertible con un
+    `UPDATE catedras SET vigente = TRUE`.
+    """
+    ids = list(vistas)
+    # `id <> ALL(ARRAY[]::int[])` es TRUE para toda fila: con una lista vacía esto
+    # daría de baja la oferta entera. `evaluar_sweep` ya lo impide; esto es el
+    # cinturón sobre los tirantes, porque el error sería silencioso y total.
+    if not ids:
+        raise ValueError("dar_de_baja_no_vistas: lista de vistas vacía, se aborta")
+    return conn.execute(
+        "UPDATE catedras SET vigente = FALSE WHERE vigente AND id <> ALL(%s)",
+        (ids,),
+    ).rowcount
 
 
 def save_detalle(

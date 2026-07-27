@@ -79,7 +79,7 @@ URLs locales: FE `http://localhost:5173`, API `http://localhost:8000`, Swagger `
 - `carreras(slug, nombre, sort_order)` — las 4 carreras de la facultad. El slug se mapea desde el id del tab del HTML de `academica.psi.uba.ar` (PS/PR/LM/TE) en el scraper.
 - `user_profile(uid, carrera)` — carrera elegida por un usuario logueado (anónimos la guardan en `localStorage`). Se crea/actualiza vía `PATCH /me/profile`.
 - `materias(codigo, nombre, carrera)` — código numérico de la materia; `carrera` referencia `carreras(slug)`.
-- `catedras(id, materia_codigo, numero, titular, cuatrimestre)`.
+- `catedras(id, materia_codigo, numero, titular, cuatrimestre, vigente, last_seen_at)` — `vigente` marca si la cátedra figura en la oferta del cuatrimestre actual. El scraper la apaga cuando desaparece del índice (nunca borra) y la reactiva si vuelve. **Las cátedras no vigentes se excluyen del armado de planes pero siguen visibles y reseñables**: sus `cursos` se conservan justamente para eso. Detalle del sweep y sus guardas en [backend/CLAUDE.md](backend/CLAUDE.md#vigencia-de-la-oferta).
 - `cursos(id, catedra_id, tipo, codigo, dia, hora_inicio, hora_fin, profesor, aula, sede, ...)` con `tipo ∈ {teorico, seminario, comision}`.
 - `comision_obliga(comision_id, obliga_a_id)` — many-to-many: una comisión puede obligar a 1 o 2 cursos (teórico/seminario) de la misma cátedra. El scraper resuelve esto con matching difuso (cobertura ~99.95%).
 - `subscriptions(clerk_user_id, valid_from, valid_until, mp_payment_id, mp_external_reference, ...)` — pagos de MP. `clerk_user_id` es nombre histórico: hoy almacena el `uid` de Firebase (string opaco). No hay tabla `users` propia.

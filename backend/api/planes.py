@@ -368,7 +368,11 @@ def _hay_solapamiento(cursos: Iterable[CursoEnPlan]) -> bool:
 
 def _fetch_opciones_por_materia(conn, materia_codigos: list[int]) -> dict[int, list[OpcionMateria]]:
     """Para cada materia, devuelve todas sus opciones de cursada
-    (una por comisión, con sus obligaciones expandidas)."""
+    (una por comisión, con sus obligaciones expandidas).
+
+    Sólo cátedras vigentes: los cursos de una cátedra que dejó de dictarse siguen
+    en la DB (los necesitan las reseñas) pero no deben generar planes. Sin este
+    filtro se arman planes con los horarios del cuatrimestre anterior."""
     rows = conn.execute(
         """
         SELECT m.codigo AS materia_codigo, m.nombre AS materia_nombre,
@@ -378,7 +382,7 @@ def _fetch_opciones_por_materia(conn, materia_codigos: list[int]) -> dict[int, l
                com.dia, com.hora_inicio, com.hora_fin,
                com.profesor, com.aula, com.sede, com.vacantes
           FROM materias m
-          JOIN catedras ca ON ca.materia_codigo = m.codigo
+          JOIN catedras ca ON ca.materia_codigo = m.codigo AND ca.vigente
           JOIN cursos com ON com.catedra_id = ca.id AND com.tipo = 'comision'
          WHERE m.codigo = ANY(%s)
          ORDER BY m.codigo, ca.id, LENGTH(com.codigo), com.codigo

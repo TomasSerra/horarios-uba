@@ -31,6 +31,29 @@ def _req(materias, **overrides):
 
 # ----------------------------- Casos base -------------------------------------
 
+class TestVigencia:
+    """El armado sólo puede usar cátedras vigentes.
+
+    El filtrado ocurre en SQL, y FakeConn no ejecuta SQL: acá sólo se puede
+    verificar que el predicado siga en el query. El filtrado real se prueba
+    contra la DB local (ver la sección de verificación del README de backend).
+    """
+
+    def test_query_de_opciones_filtra_por_vigente(self, fake_conn):
+        setup_planes_db(fake_conn, [
+            make_comision_row(comision_id=100, materia_codigo=1, materia_nombre="M1",
+                              catedra_id=10, dia="lunes",
+                              hora_inicio=time(10, 0), hora_fin=time(12, 0)),
+        ])
+        armar_planes(fake_conn, _req([MateriaSeleccionada(codigo=1)]))
+
+        sql_opciones = next(
+            sql for sql, _ in fake_conn.executed if "FROM materias m" in sql
+        )
+        normalizado = " ".join(sql_opciones.split())
+        assert "JOIN catedras ca ON ca.materia_codigo = m.codigo AND ca.vigente" in normalizado
+
+
 class TestBase:
     def test_happy_path_2x2_sin_conflictos(self, fake_conn):
         # 2 materias × 2 comisiones, en días distintos → 4 planes posibles.

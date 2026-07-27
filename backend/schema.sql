@@ -27,13 +27,26 @@ ALTER TABLE materias ADD COLUMN IF NOT EXISTS carrera TEXT REFERENCES carreras(s
 
 CREATE INDEX IF NOT EXISTS idx_materias_carrera ON materias(carrera);
 
+-- `vigente` marca si la cátedra figura en la oferta del cuatrimestre actual.
+-- El scraper la apaga (nunca borra) cuando desaparece del índice de la fuente,
+-- y la vuelve a prender sola si reaparece. Las cátedras no vigentes se excluyen
+-- del armado de planes pero siguen visibles en reseñas: los `cursos` viejos se
+-- conservan justamente para eso (validar el profesor de una reseña).
 CREATE TABLE IF NOT EXISTS catedras (
     id              INTEGER PRIMARY KEY,
     materia_codigo  INTEGER NOT NULL REFERENCES materias(codigo),
     numero          TEXT,
     titular         TEXT,
-    cuatrimestre    TEXT
+    cuatrimestre    TEXT,
+    vigente         BOOLEAN NOT NULL DEFAULT TRUE,
+    last_seen_at    TIMESTAMPTZ
 );
+
+-- Para DBs preexistentes (Neon). DEFAULT TRUE deja toda fila existente vigente,
+-- así que agregar la columna no cambia el comportamiento de la app hasta que el
+-- scraper corra su primer sweep.
+ALTER TABLE catedras ADD COLUMN IF NOT EXISTS vigente BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE catedras ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
 
 DO $$
 BEGIN
@@ -63,6 +76,11 @@ CREATE TABLE IF NOT EXISTS cursos (
 CREATE INDEX IF NOT EXISTS idx_cursos_dia       ON cursos(dia);
 CREATE INDEX IF NOT EXISTS idx_cursos_catedra   ON cursos(catedra_id);
 CREATE INDEX IF NOT EXISTS idx_catedras_materia ON catedras(materia_codigo);
+-- Índice parcial para las lecturas del armado de planes, que siempre filtran por
+-- vigencia. El índice completo de arriba sigue sirviendo a las queries de reseñas,
+-- que a propósito NO filtran.
+CREATE INDEX IF NOT EXISTS idx_catedras_materia_vigente
+    ON catedras(materia_codigo) WHERE vigente;
 
 -- Relación many-to-many: una comisión obliga a 0, 1 o 2 cursos (teórico y/o
 -- seminario) de la misma cátedra. Resuelta por el scraper a partir del campo
