@@ -129,6 +129,9 @@ export function MateriaCard({ nombre, seleccion, onChange, onRemove }: Props) {
   // Si la cátedra/sede elegida deja profesores seleccionados fuera de lo
   // disponible, los limpio. null = todos (no hay nada que sanitizar).
   useEffect(() => {
+    // Sin opciones cargadas no hay disponibles todavía y esto borraría una
+    // selección legítima (p. ej. la restaurada desde ?q= al recargar).
+    if (!opciones) return;
     if (seleccion.profesores === null) return;
     if (seleccion.profesores.length === 0) return;
     const validos = new Set(profesoresDisponibles);
@@ -137,7 +140,7 @@ export function MateriaCard({ nombre, seleccion, onChange, onRemove }: Props) {
       onChange({ ...seleccion, profesores: filtrados });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profesoresDisponibles]);
+  }, [opciones, profesoresDisponibles]);
 
   const catedraSeleccionada = opciones?.catedras.find(
     (c) => c.id === seleccion.catedra_id

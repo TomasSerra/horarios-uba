@@ -115,6 +115,15 @@ export function ReviewDialog({
   // Callback ref → state para que el container llegue ya resuelto al popover.
   const [contentEl, setContentEl] = useState<HTMLDivElement | null>(null);
 
+  // Radix portalea Select/Popover a <body>. En touch el DismissableLayer difiere
+  // el "pointer down outside" al click siguiente, y ese click lo consume también
+  // el layer del Dialog, que se cierra de rebote. Sellamos el cierre de cada
+  // overlay interno para descartar el interact-outside inmediato del Dialog.
+  const innerLayerClosedAtRef = useRef(0);
+  const sealInnerLayerClose = () => {
+    innerLayerClosedAtRef.current = Date.now();
+  };
+
   const [materiaCodigo, setMateriaCodigo] = useState<number | null>(null);
   const [catedraId, setCatedraId] = useState<number | null>(null);
   const [profesor, setProfesor] = useState<string | null>(null);
@@ -226,6 +235,11 @@ export function ReviewDialog({
     >
       <DialogContent
         ref={setContentEl}
+        onInteractOutside={(e) => {
+          if (Date.now() - innerLayerClosedAtRef.current < 400) {
+            e.preventDefault();
+          }
+        }}
         className={cn(
           "flex max-h-[calc(100dvh-2rem)] flex-col",
           needsPicker && "sm:max-w-lg",
@@ -280,6 +294,7 @@ export function ReviewDialog({
                       selected={materiaCodigo}
                       selectedNombre={materiaNombre}
                       popoverContainer={contentEl}
+                      onOverlayClose={sealInnerLayerClose}
                       onSelect={(codigo) => {
                         setMateriaCodigo(codigo);
                         setCatedraId(null);
@@ -295,6 +310,7 @@ export function ReviewDialog({
                     </label>
                     <Select
                       value={catedraId != null ? String(catedraId) : undefined}
+                      onOpenChange={(v) => !v && sealInnerLayerClose()}
                       onValueChange={(v) => {
                         setCatedraId(Number(v));
                         setProfesor(null);
@@ -396,6 +412,7 @@ export function ReviewDialog({
                   // trigger vuelva al placeholder.
                   key={profesor ?? "sin-profesor"}
                   value={profesor ?? undefined}
+                  onOpenChange={(v) => !v && sealInnerLayerClose()}
                   onValueChange={(v) => {
                     if (v === PROFESOR_NINGUNO) {
                       setProfesor(null);
@@ -460,6 +477,7 @@ export function ReviewDialog({
                 </label>
                 <Select
                   value={String(anio)}
+                  onOpenChange={(v) => !v && sealInnerLayerClose()}
                   onValueChange={(v) => setAnio(Number(v))}
                 >
                   <SelectTrigger className="sm:w-40">
@@ -516,6 +534,7 @@ function MateriaPicker({
   selectedNombre,
   popoverContainer,
   onSelect,
+  onOverlayClose,
 }: {
   materias: { codigo: number; nombre: string }[];
   loading: boolean;
@@ -523,20 +542,10 @@ function MateriaPicker({
   selectedNombre: string | null;
   popoverContainer?: HTMLElement | null;
   onSelect: (codigo: number) => void;
+  onOverlayClose: () => void;
 }) {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const drawerInputRef = useRef<HTMLInputElement>(null);
-
-  // Foco al buscador al abrir el bottom sheet (mismo comportamiento que el
-  // selector de materias del generador).
-  useEffect(() => {
-    if (!drawerOpen) return;
-    const id = window.requestAnimationFrame(() => {
-      drawerInputRef.current?.focus({ preventScroll: true });
-    });
-    return () => window.cancelAnimationFrame(id);
-  }, [drawerOpen]);
 
   const triggerClass =
     "flex h-10 w-full items-center gap-2 rounded-lg border border-input bg-white px-3 text-left text-sm transition-colors hover:bg-accent max-sm:min-h-[44px]";
@@ -566,7 +575,6 @@ function MateriaPicker({
       )}
     >
       <CommandInput
-        ref={drawer ? drawerInputRef : undefined}
         placeholder="Buscar materia…"
         className={cn("pr-12 wide:pr-0", drawer && "text-base")}
       />
@@ -605,7 +613,13 @@ function MateriaPicker({
   return (
     <>
       {/* Desktop: dropdown con buscador */}
-      <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
+      <Popover
+        open={popoverOpen}
+        onOpenChange={(v) => {
+          setPopoverOpen(v);
+          if (!v) onOverlayClose();
+        }}
+      >
         <PopoverTrigger asChild>
           <button
             type="button"
@@ -627,7 +641,10 @@ function MateriaPicker({
       {/* Mobile: bottom sheet (igual que el generador de planes) */}
       <Drawer
         open={drawerOpen}
-        onOpenChange={setDrawerOpen}
+        onOpenChange={(v) => {
+          setDrawerOpen(v);
+          if (!v) onOverlayClose();
+        }}
         shouldScaleBackground={false}
       >
         <DrawerTrigger asChild>
@@ -637,6 +654,9 @@ function MateriaPicker({
         </DrawerTrigger>
         <DrawerContent
           showHandle={false}
+          // Sin autofocus: si enfocamos el input, el teclado virtual salta y
+          // tapa media pantalla antes de que el usuario decida si va a buscar.
+          onOpenAutoFocus={(e) => e.preventDefault()}
           className="h-[calc(100dvh-16px)] max-h-[calc(100dvh-16px)] overflow-hidden rounded-t-2xl border-0"
         >
           <div className="relative flex min-h-0 flex-1 flex-col">

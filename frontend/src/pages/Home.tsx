@@ -11,6 +11,7 @@ import {
   ChevronDown,
   Filter,
   BookOpen,
+  Info,
 } from "lucide-react";
 import mpIcon from "@/assets/mp-icon.png";
 import { useAuth } from "@/lib/useAuth";
@@ -1057,6 +1058,14 @@ export function Home() {
                       " flex-col gap-4 wide:min-h-0 wide:flex-1"
                     }
                   >
+                    <p className="flex items-start gap-2 text-xs text-muted-foreground">
+                      <Info className="mt-0.5 size-3.5 shrink-0" />
+                      <span>
+                        Usando horarios del 1er cuatrimestre 2026. Cuando estén
+                        publicados los horarios del 2do cuatrimestre serán
+                        actualizados automáticamente.
+                      </span>
+                    </p>
                     <MateriaSelector
                       selected={materias}
                       onChange={setMaterias}

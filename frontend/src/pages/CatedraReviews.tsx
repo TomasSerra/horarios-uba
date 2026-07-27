@@ -158,6 +158,9 @@ function ProfesoresFilter({
   const [expanded, setExpanded] = useState(false);
   // Altura (px) del bloque de 2 filas y media; null = no hace falta clampear.
   const [collapsedHeight, setCollapsedHeight] = useState<number | null>(null);
+  // Índice del primer chip de la 3ra fila: de ahí en adelante están cortados y
+  // no se leen enteros, así que expanden en vez de filtrar.
+  const [cutFromIndex, setCutFromIndex] = useState<number | null>(null);
 
   const ordenados = useMemo(() => {
     return [...profesores].sort((a, b) => {
@@ -172,9 +175,13 @@ function ProfesoresFilter({
   useLayoutEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+    const reset = () => {
+      setCollapsedHeight(null);
+      setCutFromIndex(null);
+    };
     const measure = () => {
       const chips = Array.from(el.children) as HTMLElement[];
-      if (chips.length === 0) return setCollapsedHeight(null);
+      if (chips.length === 0) return reset();
       // Posiciones relativas al contenedor (getBoundingClientRect, no offsetTop:
       // offsetTop es relativo al offsetParent posicionado, no a este div).
       // Redondeamos el top para que el subpixel no invente filas de más.
@@ -186,13 +193,15 @@ function ProfesoresFilter({
       const tops = Array.from(new Set(rects.map((r) => r.top))).sort(
         (a, b) => a - b
       );
-      if (tops.length <= 2) return setCollapsedHeight(null);
+      if (tops.length <= 2) return reset();
       // Cortamos a mitad de la 3ra fila. tops[2] ya incluye el gap, así que
       // alcanza con sumarle media altura de los chips de esa fila.
       const tercerFila = rects.filter((r) => r.top === tops[2]);
       const altoTercerFila =
         Math.max(...tercerFila.map((r) => r.bottom)) - tops[2];
       setCollapsedHeight(tops[2] + altoTercerFila / 2);
+      // `rects` sigue el orden de `ordenados`, así que el índice mapea directo.
+      setCutFromIndex(rects.findIndex((r) => r.top === tops[2]));
     };
     measure();
     const ro = new ResizeObserver(measure);
@@ -213,14 +222,22 @@ function ProfesoresFilter({
           className="flex flex-col gap-2 overflow-hidden sm:flex-row sm:flex-wrap"
           style={clamp ? { maxHeight: collapsedHeight! } : undefined}
         >
-          {ordenados.map((p) => {
+          {ordenados.map((p, i) => {
             const isSel = selected === p.profesor;
+            // Chip de la 3ra fila (cortada): tocarlo despliega la lista en vez
+            // de filtrar por un profesor que no se llega a leer.
+            const recortado =
+              clamp && cutFromIndex != null && i >= cutFromIndex;
             return (
               <button
                 key={p.profesor}
                 type="button"
-                aria-pressed={isSel}
-                onClick={() => onSelect(isSel ? null : p.profesor)}
+                aria-pressed={recortado ? undefined : isSel}
+                title={recortado ? "Ver todos los profesores" : undefined}
+                onClick={() => {
+                  if (recortado) return setExpanded(true);
+                  onSelect(isSel ? null : p.profesor);
+                }}
                 className={cn(
                   "flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left transition-colors sm:w-auto",
                   isSel
@@ -251,7 +268,12 @@ function ProfesoresFilter({
           })}
         </div>
         {clamp && (
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-background to-transparent" />
+          <button
+            type="button"
+            aria-label="Ver todos los profesores"
+            onClick={() => setExpanded(true)}
+            className="absolute inset-x-0 bottom-0 h-12 cursor-pointer bg-gradient-to-t from-background to-transparent"
+          />
         )}
       </div>
       {collapsedHeight != null && (
