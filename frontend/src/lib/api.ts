@@ -120,9 +120,13 @@ const MATERIAS_TTL_MS = 60 * 60 * 1000;
 // puede no tener campos que el FE ya da por hechos.
 //
 // BUMPEAR cuando: cambie el shape de estos payloads, o cuando haga falta que los
-// usuarios vean datos nuevos ya mismo (p. ej. al arrancar un cuatrimestre nuevo,
-// deployando el FE junto con la corrida del scraper).
-export const DATA_VERSION = 4;
+// usuarios vean datos nuevos ya mismo.
+//
+// En particular, al arrancar un cuatrimestre el orden correcto es
+// **scraper primero, bump + deploy del FE después**. Al revés queda cacheado el
+// snapshot previo al sweep: trae el campo de vigencia (así que `fetchFresco` lo
+// da por bueno) pero con todas las cátedras todavía vigentes.
+export const DATA_VERSION = 5;
 
 function withVersion(path: string): string {
   return `${path}${path.includes("?") ? "&" : "?"}v=${DATA_VERSION}`;
