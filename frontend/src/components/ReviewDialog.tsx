@@ -151,6 +151,11 @@ export function ReviewDialog({
 
   const needsPicker = !fixedCatedra;
 
+  // Ojo: acá NO se filtra por vigencia, a diferencia de MateriaCard. Se puede (y
+  // se debe poder) reseñar una materia o una cátedra que ya no se dicta: la
+  // reseña es un registro histórico de una cursada pasada. Los `cursos` viejos
+  // se conservan en la DB justamente para que el backend siga validando el
+  // profesor elegido.
   const { data: materias, isLoading: materiasLoading } = useQuery({
     queryKey: ["materias-review", carrera],
     queryFn: () => api.listMateriasCached(carrera as string),

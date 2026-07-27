@@ -62,19 +62,27 @@ export function MateriaCard({ nombre, seleccion, onChange, onRemove }: Props) {
     };
   }, [seleccion.codigo]);
 
+  // El endpoint devuelve también las cátedras que ya no se dictan (las necesita
+  // el diálogo de reseñas). Para armar planes sólo sirven las vigentes, y como
+  // los universos de profesor y sede se derivan de acá, filtrar en este único
+  // punto alcanza para las tres dimensiones.
+  const catedrasVigentes = useMemo(
+    () => opciones?.catedras.filter((c) => c.vigente) ?? [],
+    [opciones]
+  );
+
   // Filtrado de a tres (cátedra ⇄ profesor ⇄ sede): cada dimensión se acota a
   // lo compatible con las otras dos. La relación profesor↔sede vive en la
   // comisión, así que derivamos todo de la lista plana de comisiones.
   const comisiones = useMemo(() => {
-    if (!opciones) return [];
-    return opciones.catedras.flatMap((c) =>
+    return catedrasVigentes.flatMap((c) =>
       (c.comisiones ?? []).map((cm) => ({
         catedra_id: c.id,
         profesor: cm.profesor,
         sede: cm.sede,
       }))
     );
-  }, [opciones]);
+  }, [catedrasVigentes]);
 
   // Universos posibles para esta materia.
   const profesoresUniverse = useMemo(() => {
@@ -126,6 +134,17 @@ export function MateriaCard({ nombre, seleccion, onChange, onRemove }: Props) {
     return set;
   }, [comisiones, seleccion.catedra_id, seleccion.profesores]);
 
+  // Una cátedra restaurada desde ?q= o desde el historial puede haber dejado de
+  // dictarse. Sin esto el dropdown muestra "Todas" pero igual se postea el id
+  // muerto a /planes, que devuelve cero planes con un cartel confuso.
+  useEffect(() => {
+    if (!opciones) return;
+    if (seleccion.catedra_id === null) return;
+    if (catedrasVigentes.some((c) => c.id === seleccion.catedra_id)) return;
+    onChange({ ...seleccion, catedra_id: null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opciones, catedrasVigentes]);
+
   // Si la cátedra/sede elegida deja profesores seleccionados fuera de lo
   // disponible, los limpio. null = todos (no hay nada que sanitizar).
   useEffect(() => {
@@ -142,9 +161,12 @@ export function MateriaCard({ nombre, seleccion, onChange, onRemove }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [opciones, profesoresDisponibles]);
 
-  const catedraSeleccionada = opciones?.catedras.find(
+  const catedraSeleccionada = catedrasVigentes.find(
     (c) => c.id === seleccion.catedra_id
   );
+
+  // Materia agregada desde una URL o un historial viejos, ya discontinuada.
+  const sinOferta = !!opciones && catedrasVigentes.length === 0;
 
   return (
     <div className="rounded-xl border border-border bg-white p-4">
@@ -171,7 +193,14 @@ export function MateriaCard({ nombre, seleccion, onChange, onRemove }: Props) {
         <p className="mt-3 text-xs text-destructive">{error}</p>
       )}
 
-      {opciones && (
+      {sinOferta && (
+        <p className="mt-3 text-xs text-amber-700">
+          Esta materia no se dicta este cuatrimestre. Quitala para poder generar
+          planes.
+        </p>
+      )}
+
+      {opciones && !sinOferta && (
         <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
           <div>
             <p className="mb-1 text-xs font-medium text-muted-foreground">
@@ -181,7 +210,7 @@ export function MateriaCard({ nombre, seleccion, onChange, onRemove }: Props) {
               <Skeleton className="h-9 w-full rounded-lg" />
             ) : (
               <CatedraDropdown
-                catedras={opciones.catedras}
+                catedras={catedrasVigentes}
                 disponibles={catedrasDisponibles}
                 selected={seleccion.catedra_id}
                 onSelect={(id) => onChange({ ...seleccion, catedra_id: id })}

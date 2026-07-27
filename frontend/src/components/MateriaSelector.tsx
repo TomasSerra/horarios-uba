@@ -146,8 +146,17 @@ export function MateriaSelector({ selected, onChange }: Props) {
     [selected]
   );
 
+  // Las materias sin cátedras vigentes no se dictan este cuatrimestre: no tiene
+  // sentido ofrecerlas para armar un plan. El endpoint igual las devuelve porque
+  // el buscador de reseñas sí las necesita.
+  // El `?v=` de DATA_VERSION en la request garantiza que el payload traiga el
+  // campo, así que acá se filtra estricto (un `undefined` sería un bug, no una
+  // respuesta vieja).
   const disponibles = useMemo(
-    () => materias.filter((m) => !selectedIds.has(m.codigo)),
+    () =>
+      materias.filter(
+        (m) => !selectedIds.has(m.codigo) && m.cant_catedras_vigentes > 0
+      ),
     [materias, selectedIds]
   );
 
@@ -220,8 +229,8 @@ export function MateriaSelector({ selected, onChange }: Props) {
                 >
                   <span className="line-clamp-2 flex-1">{m.nombre}</span>
                   <span className="ml-2 shrink-0 text-xs text-muted-foreground">
-                    {m.cant_catedras}{" "}
-                    {m.cant_catedras === 1 ? "cát." : "cáts."}
+                    {m.cant_catedras_vigentes}{" "}
+                    {m.cant_catedras_vigentes === 1 ? "cát." : "cáts."}
                   </span>
                 </CommandItem>
               ))}

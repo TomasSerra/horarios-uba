@@ -11,7 +11,6 @@ import {
   ChevronDown,
   Filter,
   BookOpen,
-  Info,
 } from "lucide-react";
 import mpIcon from "@/assets/mp-icon.png";
 import { useAuth } from "@/lib/useAuth";
@@ -1043,7 +1042,22 @@ export function Home() {
                         }
                       />
                       <BookOpen className="size-4 shrink-0 text-foreground wide:hidden" />
-                      <CardTitle className="min-w-0 flex-1">Materias</CardTitle>
+                      <CardTitle className="shrink-0">Materias</CardTitle>
+                      <span className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                        {/* Punto "en vivo": el ping es una copia absolute que se
+                            expande sobre el punto sólido. */}
+                        <span className="relative flex size-2 shrink-0" aria-hidden>
+                          <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-500 opacity-75 motion-reduce:hidden" />
+                          <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
+                        </span>
+                        <span className="truncate">
+                          {/* "Horarios" se cae en pantallas angostas: si no, la
+                              fila no entra junto al contador de materias. */}
+                          <span className="hidden sm:inline">Horarios </span>2do
+                          cuatrimestre 2026
+                        </span>
+                      </span>
+                      <span className="flex-1" />
                       {!materiasOpen && (
                         <span className="shrink-0 text-sm text-muted-foreground wide:hidden">
                           {materias.length}{" "}
@@ -1058,14 +1072,6 @@ export function Home() {
                       " flex-col gap-4 wide:min-h-0 wide:flex-1"
                     }
                   >
-                    <p className="flex items-start gap-2 text-xs text-muted-foreground">
-                      <Info className="mt-0.5 size-3.5 shrink-0" />
-                      <span>
-                        Usando horarios del 1er cuatrimestre 2026. Cuando estén
-                        publicados los horarios del 2do cuatrimestre serán
-                        actualizados automáticamente.
-                      </span>
-                    </p>
                     <MateriaSelector
                       selected={materias}
                       onChange={setMaterias}

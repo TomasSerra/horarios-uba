@@ -3,7 +3,13 @@ export type TipoCurso = "teorico" | "seminario" | "comision";
 export interface MateriaListItem {
   codigo: number;
   nombre: string;
+  // Total histórico, incluye cátedras que ya no se dictan. Lo usa el buscador
+  // de reseñas, que debe seguir encontrando materias discontinuadas.
   cant_catedras: number;
+  // Las que se dictan este cuatrimestre. En 0 la materia no se ofrece y se
+  // oculta del selector del armador de planes. Siempre presente: las requests
+  // llevan `?v=DATA_VERSION`, así que nunca se sirve un payload viejo (ver api.ts).
+  cant_catedras_vigentes: number;
 }
 
 export interface CursoSummary {
@@ -76,6 +82,9 @@ export interface CatedraOpcion {
   numero: string | null;
   titular: string | null;
   cuatrimestre: string | null;
+  // Se dicta este cuatrimestre. El endpoint devuelve vigentes y no vigentes:
+  // el armador de planes filtra, el diálogo de reseñas a propósito no.
+  vigente: boolean;
   profesores: string[];
   comisiones: ComisionOpcion[];
   // Reseñas de la cátedra (para mostrar estrellas en el selector del planner).

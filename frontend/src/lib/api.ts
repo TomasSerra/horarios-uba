@@ -108,9 +108,37 @@ export interface PagoStatus {
 // Cache de listMaterias en localStorage: el scraper corre diario, los datos
 // son estables. Evita pegarle al BE cada vez que se monta el selector.
 const MATERIAS_TTL_MS = 60 * 60 * 1000;
-// Bumpear cuando cambie el shape de MateriaListItem (campo nuevo, rename,
-// etc.) para invalidar caches viejas sin esperar el TTL.
-const MATERIAS_CACHE_VERSION = 2;
+
+// Versión de los datos del catálogo (carreras / materias / opciones). Cumple
+// dos funciones:
+//   1. invalida el cache de localStorage (se guarda junto al payload), y
+//   2. viaja como `?v=` en la URL de los GETs cacheables, así un deploy del FE
+//      cambia la URL y saltea el cache HTTP del browser y del CDN al instante.
+//
+// Sin (2) no alcanza con bumpear la versión: el refetch pega contra la misma URL
+// y el browser devuelve el body viejo (Cache-Control de _set_static_cache), que
+// puede no tener campos que el FE ya da por hechos.
+//
+// BUMPEAR cuando: cambie el shape de estos payloads, o cuando haga falta que los
+// usuarios vean datos nuevos ya mismo (p. ej. al arrancar un cuatrimestre nuevo,
+// deployando el FE junto con la corrida del scraper).
+export const DATA_VERSION = 4;
+
+function withVersion(path: string): string {
+  return `${path}${path.includes("?") ? "&" : "?"}v=${DATA_VERSION}`;
+}
+
+const MATERIAS_CACHE_VERSION = DATA_VERSION;
+
+// Red de seguridad sobre el `?v=`: si igual llega un payload viejo (bundle sin
+// recargar, proxy que ignora la query, CDN raro), reintenta salteando el cache
+// HTTP en vez de dejar que el FE filtre contra un campo `undefined` — que se
+// vería como "no hay materias" en lugar de como un error.
+async function fetchFresco<T>(path: string, estaCompleto: (d: T) => boolean) {
+  const data = await request<T>(path);
+  if (estaCompleto(data)) return data;
+  return request<T>(path, { cache: "reload" });
+}
 
 function readMateriasCache(key: string): MateriaListItem[] | null {
   try {
@@ -119,6 +147,12 @@ function readMateriasCache(key: string): MateriaListItem[] | null {
     const { data, expires, version } = JSON.parse(raw);
     if (version !== MATERIAS_CACHE_VERSION) return null;
     if (typeof expires !== "number" || expires < Date.now()) return null;
+    // Puede haber quedado guardado un payload viejo bajo la versión actual (se
+    // escribió antes de que existiera el chequeo de shape). Si le falta el campo
+    // de vigencia lo descartamos: mejor un refetch que un selector vacío.
+    if (data.length > 0 && data[0].cant_catedras_vigentes === undefined) {
+      return null;
+    }
     return data as MateriaListItem[];
   } catch {
     return null;
@@ -141,21 +175,27 @@ function writeMateriasCache(key: string, data: MateriaListItem[]): void {
 }
 
 export const api = {
-  listCarreras: () => request<Carrera[]>("/carreras"),
+  listCarreras: () => request<Carrera[]>(withVersion("/carreras")),
   // Filtro por nombre ocurre client-side en MateriaSelector vía cmdk; acá solo
   // cacheamos el listado completo (con TTL) por carrera.
   listMateriasCached: async (carrera?: string): Promise<MateriaListItem[]> => {
     const key = `materias:${carrera ?? "all"}`;
     const cached = readMateriasCache(key);
     if (cached) return cached;
-    const data = await request<MateriaListItem[]>(
-      `/materias${carrera ? `?carrera=${encodeURIComponent(carrera)}` : ""}`
+    const data = await fetchFresco<MateriaListItem[]>(
+      withVersion(
+        `/materias${carrera ? `?carrera=${encodeURIComponent(carrera)}` : ""}`
+      ),
+      (d) => d.length === 0 || d[0].cant_catedras_vigentes !== undefined
     );
     writeMateriasCache(key, data);
     return data;
   },
   getMateriaOpciones: (codigo: number) =>
-    request<MateriaOpciones>(`/materias/${codigo}/opciones`),
+    fetchFresco<MateriaOpciones>(
+      withVersion(`/materias/${codigo}/opciones`),
+      (d) => d.catedras.length === 0 || d.catedras[0].vigente !== undefined
+    ),
   getMe: (token: string) => request<Me>("/me", undefined, token),
   updateProfile: (
     body: { carrera?: string; nombre?: string },
