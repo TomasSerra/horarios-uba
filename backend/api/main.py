@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -192,7 +193,11 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         _req_id(request),
         exc.errors(),
     )
-    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+    # Los errores de un validador custom traen la ValueError original en `ctx`,
+    # que `json.dumps` no serializa: sin el encoder el 422 se vuelve un 500.
+    return JSONResponse(
+        status_code=422, content={"detail": jsonable_encoder(exc.errors())}
+    )
 
 
 @app.exception_handler(Exception)
@@ -292,14 +297,14 @@ def list_materias(
     # buscador de reseñas las necesita. `cant_catedras_vigentes` es lo que mira
     # el selector del armador de planes para ocultar las que están en 0.
     sql = """
-        SELECT m.codigo, m.nombre,
+        SELECT m.codigo, m.nombre, m.anual,
                COUNT(c.id) AS cant_catedras,
                COUNT(c.id) FILTER (WHERE c.vigente) AS cant_catedras_vigentes
           FROM materias m
           LEFT JOIN catedras c ON c.materia_codigo = m.codigo
          WHERE (%(pattern)s::text IS NULL OR m.nombre ILIKE %(pattern)s)
            AND (%(carrera)s::text IS NULL OR m.carrera = %(carrera)s)
-         GROUP BY m.codigo, m.nombre
+         GROUP BY m.codigo, m.nombre, m.anual
          ORDER BY m.nombre
     """
     pattern = f"%{q}%" if q else None
@@ -367,8 +372,9 @@ def get_materia_opciones(codigo: int, response: Response) -> MateriaOpciones:
                    ) AS profesores,
                    COALESCE(
                        jsonb_agg(DISTINCT jsonb_build_object(
+                           'codigo', cu.codigo,
                            'profesor', cu.profesor, 'sede', cu.sede))
-                         FILTER (WHERE cu.profesor IS NOT NULL OR cu.sede IS NOT NULL),
+                         FILTER (WHERE cu.id IS NOT NULL),
                        '[]'::jsonb
                    ) AS comisiones,
                    (SELECT AVG(r.rating)::float FROM catedra_reviews r
@@ -532,10 +538,15 @@ def search_cursos(
     ]
 
 
-def _request_uses_filters(req: PlanRequest) -> bool:
-    """Detecta si el request usa alguna feature Pro (filtros)."""
+def _request_uses_filters(req: PlanRequest, anuales: set[int]) -> bool:
+    """Detecta si el request usa alguna feature Pro (filtros).
+
+    `anuales` son los códigos de las materias del request que se cursan todo el
+    año: ahí cátedra y comisión son gratis, porque el alumno ya está cursando una
+    comisión concreta y necesita bloquear ese horario para armar el resto.
+    """
     # `dias_excluidos` y `solo_con_cupos` son gratis (el FE no los gatea).
-    # Pro: franjas, sedes, bache máximo, y cátedra/profesores/sede por materia.
+    # Pro: franjas, sedes, bache máximo, y cátedra/comisión/profesores/sede por materia.
     if req.franjas_excluidas or req.sedes_permitidas:
         return True
     if req.max_bache_horas is not None:
@@ -545,9 +556,21 @@ def _request_uses_filters(req: PlanRequest) -> bool:
     if req.min_horas_dia is not None or req.max_horas_dia is not None:
         return True
     for m in req.materias:
-        if m.catedra_id is not None or m.profesores is not None or m.sede is not None:
+        if m.profesores is not None or m.sede is not None:
+            return True
+        if m.codigo in anuales:
+            continue
+        if m.catedra_id is not None or m.comision_codigo is not None:
             return True
     return False
+
+
+def _materias_anuales(conn, codigos: list[int]) -> set[int]:
+    rows = conn.execute(
+        "SELECT codigo FROM materias WHERE anual AND codigo = ANY(%s)",
+        (codigos,),
+    ).fetchall()
+    return {r["codigo"] for r in rows}
 
 
 @app.post("/planes", response_model=PlanResponse)
@@ -559,7 +582,16 @@ def post_planes(
         is_paid = (
             user is not None and has_active_subscription(conn, user.id)
         )
-        if _request_uses_filters(req) and not is_paid:
+        # La query de anuales sólo hace falta para decidir el paywall: si el user
+        # ya es Pro, o si no mandó cátedra/comisión, nos ahorramos el round-trip.
+        anuales: set[int] = set()
+        if not is_paid and any(
+            m.catedra_id is not None or m.comision_codigo is not None
+            for m in req.materias
+        ):
+            anuales = _materias_anuales(conn, [m.codigo for m in req.materias])
+
+        if _request_uses_filters(req, anuales) and not is_paid:
             # Si el FE deshabilita los filtros para no-Pro, llegar acá con
             # filtros == alguien intentando bypassear el paywall.
             raise HTTPException(
@@ -567,7 +599,8 @@ def post_planes(
                 detail=(
                     "Los filtros (franjas, sedes, bache máximo, días por "
                     "semana, horas por día, cátedra y profesores) son una "
-                    "función Pro. Suscribite para usarlos."
+                    "función Pro. Suscribite para usarlos. En materias anuales, "
+                    "cátedra y comisión son libres."
                 ),
             )
         max_allowed = 100 if is_paid else 15

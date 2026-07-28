@@ -62,6 +62,9 @@ class CatedraDetail(BaseModel):
 class MateriaListItem(BaseModel):
     codigo: int
     nombre: str
+    # Se cursa todo el año. El FE la usa para liberar los filtros de cátedra y
+    # comisión (que en el resto de las materias son Pro).
+    anual: bool = False
     # Total histórico de cátedras. Lo consume el buscador de reseñas, que debe
     # seguir encontrando materias que ya no se dictan.
     cant_catedras: int
@@ -77,6 +80,7 @@ class MateriaDetail(BaseModel):
 
 
 class ComisionOpcion(BaseModel):
+    codigo: str
     profesor: str | None = None
     sede: str | None = None
 

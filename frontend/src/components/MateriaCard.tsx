@@ -6,6 +6,7 @@ import {
   Users,
   GraduationCap,
   Gem,
+  Hash,
   MapPin,
   Star,
 } from "lucide-react";
@@ -32,12 +33,15 @@ import type {
 
 interface Props {
   nombre: string;
+  // Materia anual: se cursa todo el año y el alumno ya está en una comisión
+  // concreta, así que cátedra y comisión no se gatean.
+  anual: boolean;
   seleccion: MateriaSeleccionada;
   onChange: (s: MateriaSeleccionada) => void;
   onRemove: () => void;
 }
 
-export function MateriaCard({ nombre, seleccion, onChange, onRemove }: Props) {
+export function MateriaCard({ nombre, anual, seleccion, onChange, onRemove }: Props) {
   const { isPaid, isLoading: subLoading } = useSubscription();
   const openPaywall = usePaywall();
   const [opciones, setOpciones] = useState<MateriaOpciones | null>(null);
@@ -78,24 +82,35 @@ export function MateriaCard({ nombre, seleccion, onChange, onRemove }: Props) {
     return catedrasVigentes.flatMap((c) =>
       (c.comisiones ?? []).map((cm) => ({
         catedra_id: c.id,
+        codigo: cm.codigo,
         profesor: cm.profesor,
         sede: cm.sede,
       }))
     );
   }, [catedrasVigentes]);
 
+  // Con una comisión fijada, profesor y sede quedan determinados por ella: el
+  // resto no aplica y se oculta en vez de listarse en gris (serían decenas).
+  const comisionesVisibles = useMemo(() => {
+    const codigo = seleccion.comision_codigo ?? null;
+    if (codigo == null) return comisiones;
+    return comisiones.filter(
+      (c) => c.codigo === codigo && c.catedra_id === seleccion.catedra_id
+    );
+  }, [comisiones, seleccion.comision_codigo, seleccion.catedra_id]);
+
   // Universos posibles para esta materia.
   const profesoresUniverse = useMemo(() => {
     const set = new Set<string>();
-    comisiones.forEach((c) => c.profesor && set.add(c.profesor));
+    comisionesVisibles.forEach((c) => c.profesor && set.add(c.profesor));
     return Array.from(set).sort();
-  }, [comisiones]);
+  }, [comisionesVisibles]);
 
   const sedesUniverse = useMemo(() => {
     const present = new Set<string>();
-    comisiones.forEach((c) => c.sede && present.add(c.sede));
+    comisionesVisibles.forEach((c) => c.sede && present.add(c.sede));
     return SEDES.filter((s) => present.has(s.codigo));
-  }, [comisiones]);
+  }, [comisionesVisibles]);
 
   // Disponibles según la selección actual (excluyendo la propia dimensión).
   const catedrasDisponibles = useMemo(() => {
@@ -112,18 +127,18 @@ export function MateriaCard({ nombre, seleccion, onChange, onRemove }: Props) {
 
   const profesoresDisponibles = useMemo(() => {
     const set = new Set<string>();
-    comisiones.forEach((c) => {
+    comisionesVisibles.forEach((c) => {
       const okCat =
         seleccion.catedra_id == null || c.catedra_id === seleccion.catedra_id;
       const okSede = seleccion.sede == null || c.sede === seleccion.sede;
       if (okCat && okSede && c.profesor) set.add(c.profesor);
     });
     return Array.from(set).sort();
-  }, [comisiones, seleccion.catedra_id, seleccion.sede]);
+  }, [comisionesVisibles, seleccion.catedra_id, seleccion.sede]);
 
   const sedesDisponibles = useMemo(() => {
     const set = new Set<string>();
-    comisiones.forEach((c) => {
+    comisionesVisibles.forEach((c) => {
       const okCat =
         seleccion.catedra_id == null || c.catedra_id === seleccion.catedra_id;
       const okProf =
@@ -132,7 +147,7 @@ export function MateriaCard({ nombre, seleccion, onChange, onRemove }: Props) {
       if (okCat && okProf && c.sede) set.add(c.sede);
     });
     return set;
-  }, [comisiones, seleccion.catedra_id, seleccion.profesores]);
+  }, [comisionesVisibles, seleccion.catedra_id, seleccion.profesores]);
 
   // Una cátedra restaurada desde ?q= o desde el historial puede haber dejado de
   // dictarse. Sin esto el dropdown muestra "Todas" pero igual se postea el id
@@ -161,9 +176,60 @@ export function MateriaCard({ nombre, seleccion, onChange, onRemove }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [opciones, profesoresDisponibles]);
 
+  // Misma idea para la sede: fijar una comisión puede dejar la sede elegida
+  // fuera de lo posible, y ahí ni siquiera se muestra para poder cambiarla.
+  useEffect(() => {
+    if (!opciones) return;
+    if (seleccion.sede == null) return;
+    if (sedesDisponibles.has(seleccion.sede)) return;
+    onChange({ ...seleccion, sede: null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opciones, sedesDisponibles]);
+
+  // Comisiones de la cátedra elegida (sólo materias anuales las ofrecen). El
+  // código de comisión se repite entre cátedras, así que sin cátedra no hay
+  // lista posible. Se deduplica por código: la fuente puede listar la misma
+  // comisión en varias filas (co-titulares).
+  const comisionesDeCatedra = useMemo(() => {
+    if (seleccion.catedra_id == null) return [];
+    const porCodigo = new Map<string, { codigo: string; profesores: string[] }>();
+    comisiones.forEach((c) => {
+      if (c.catedra_id !== seleccion.catedra_id) return;
+      if (seleccion.sede != null && c.sede !== seleccion.sede) return;
+      if (
+        seleccion.profesores != null &&
+        !(c.profesor != null && seleccion.profesores.includes(c.profesor))
+      ) {
+        return;
+      }
+      const entry = porCodigo.get(c.codigo) ?? { codigo: c.codigo, profesores: [] };
+      if (c.profesor && !entry.profesores.includes(c.profesor)) {
+        entry.profesores.push(c.profesor);
+      }
+      porCodigo.set(c.codigo, entry);
+    });
+    return Array.from(porCodigo.values()).sort((a, b) =>
+      a.codigo.localeCompare(b.codigo, undefined, { numeric: true })
+    );
+  }, [comisiones, seleccion.catedra_id, seleccion.sede, seleccion.profesores]);
+
+  // La comisión cuelga de la cátedra: si cambia la cátedra (o la comisión
+  // guardada ya no existe ahí) la selección deja de tener sentido.
+  useEffect(() => {
+    if (!opciones) return;
+    const actual = seleccion.comision_codigo ?? null;
+    if (actual === null) return;
+    if (comisionesDeCatedra.some((c) => c.codigo === actual)) return;
+    onChange({ ...seleccion, comision_codigo: null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opciones, comisionesDeCatedra]);
+
   const catedraSeleccionada = catedrasVigentes.find(
     (c) => c.id === seleccion.catedra_id
   );
+
+  // En materias anuales cátedra y comisión son gratis; el resto sigue Pro.
+  const libre = isPaid || anual;
 
   // Materia agregada desde una URL o un historial viejos, ya discontinuada.
   const sinOferta = !!opciones && catedrasVigentes.length === 0;
@@ -201,7 +267,12 @@ export function MateriaCard({ nombre, seleccion, onChange, onRemove }: Props) {
       )}
 
       {opciones && !sinOferta && (
-        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        <div
+          className={
+            "mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 " +
+            (anual ? "lg:grid-cols-4" : "lg:grid-cols-3")
+          }
+        >
           <div>
             <p className="mb-1 text-xs font-medium text-muted-foreground">
               Cátedra
@@ -213,12 +284,33 @@ export function MateriaCard({ nombre, seleccion, onChange, onRemove }: Props) {
                 catedras={catedrasVigentes}
                 disponibles={catedrasDisponibles}
                 selected={seleccion.catedra_id}
-                onSelect={(id) => onChange({ ...seleccion, catedra_id: id })}
-                disabled={!isPaid}
+                onSelect={(id) =>
+                  onChange({ ...seleccion, catedra_id: id, comision_codigo: null })
+                }
+                disabled={!libre}
                 onLockedClick={() => openPaywall("catedra")}
               />
             )}
           </div>
+          {anual && (
+            <div>
+              <p className="mb-1 text-xs font-medium text-muted-foreground">
+                Comisión
+              </p>
+              {subLoading ? (
+                <Skeleton className="h-9 w-full rounded-lg" />
+              ) : (
+                <ComisionDropdown
+                  comisiones={comisionesDeCatedra}
+                  selected={seleccion.comision_codigo ?? null}
+                  onSelect={(codigo) =>
+                    onChange({ ...seleccion, comision_codigo: codigo })
+                  }
+                  sinCatedra={seleccion.catedra_id == null}
+                />
+              )}
+            </div>
+          )}
           <div>
             <p className="mb-1 text-xs font-medium text-muted-foreground">
               Profesores
@@ -399,6 +491,108 @@ function CatedraDropdown({
             ))}
           </>
         )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+// Nro de comisión dentro de la cátedra elegida. Sólo aparece en materias
+// anuales, donde el alumno ya está cursando una comisión concreta y quiere
+// bloquear ese horario exacto. Gratis para todos, como la cátedra en esas materias.
+function ComisionDropdown({
+  comisiones,
+  selected,
+  onSelect,
+  sinCatedra,
+}: {
+  comisiones: Array<{ codigo: string; profesores: string[] }>;
+  selected: string | null;
+  onSelect: (codigo: string | null) => void;
+  sinCatedra: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const isWide = useIsWide();
+
+  if (sinCatedra) {
+    return (
+      <div
+        title="Elegí una cátedra para poder fijar la comisión"
+        className="flex h-9 w-full items-center gap-2 rounded-lg border border-input bg-muted/40 px-3 text-left text-xs font-medium text-muted-foreground max-sm:min-h-[44px]"
+      >
+        <Hash className="size-3.5 shrink-0" />
+        <span className="flex-1 truncate">Elegí una cátedra primero</span>
+      </div>
+    );
+  }
+
+  const label = selected
+    ? `Com ${selected}`
+    : `Todas (${comisiones.length})`;
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="flex h-9 w-full items-center gap-2 rounded-lg border border-input bg-white px-3 text-left text-xs font-medium transition-colors hover:bg-accent max-sm:min-h-[44px]"
+        >
+          <Hash className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="flex-1 truncate">{label}</span>
+          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        className="w-[min(20rem,calc(100vw-2rem))] p-1"
+        align={isWide ? "start" : "center"}
+      >
+        <button
+          type="button"
+          onClick={() => {
+            onSelect(null);
+            setOpen(false);
+          }}
+          className={
+            "flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-accent max-sm:min-h-[44px] " +
+            (selected === null ? "bg-accent font-medium" : "")
+          }
+        >
+          <span>Todas las comisiones</span>
+          <span className="ml-auto text-xs text-muted-foreground">
+            {comisiones.length}
+          </span>
+        </button>
+        <Separator className="my-1" />
+        {/* Una cátedra puede tener 60 comisiones: sin el scroll el popover se
+            sale de la pantalla (en mobile no hay forma de llegar al final). */}
+        <div className="max-h-72 overflow-y-auto pr-1">
+          {comisiones.length === 0 ? (
+            <p className="py-4 text-center text-xs text-muted-foreground">
+              No hay comisiones para la selección actual.
+            </p>
+          ) : (
+            comisiones.map((c) => (
+              <button
+                key={c.codigo}
+                type="button"
+                onClick={() => {
+                  onSelect(c.codigo);
+                  setOpen(false);
+                }}
+                className={
+                  "flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-accent max-sm:min-h-[44px] " +
+                  (selected === c.codigo ? "bg-accent" : "")
+                }
+              >
+                <span className="font-medium">Com {c.codigo}</span>
+                {c.profesores.length > 0 && (
+                  <span className="text-xs text-muted-foreground">
+                    {c.profesores.join(" · ")}
+                  </span>
+                )}
+              </button>
+            ))
+          )}
+        </div>
       </PopoverContent>
     </Popover>
   );

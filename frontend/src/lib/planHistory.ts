@@ -89,9 +89,13 @@ export function entryUsesProFilters(entry: PlanHistoryEntry): boolean {
   if (f.min_dias_semana != null || f.max_dias_semana != null) return true;
   if (f.min_horas_dia != null || f.max_horas_dia != null) return true;
   for (const m of f.materias) {
-    if (m.catedra_id !== null) return true;
     if (m.profesores !== null) return true;
     if (m.sede) return true;
+    // En materias anuales cátedra y comisión son gratis. Las entradas viejas del
+    // historial no traen el flag: sin él se asume no anual, que es lo conservador.
+    if (m.anual) continue;
+    if (m.catedra_id !== null) return true;
+    if (m.comision_codigo) return true;
   }
   return false;
 }
@@ -101,6 +105,8 @@ export function seleccionUsesProFilters(
     catedra_id: number | null;
     profesores: string[] | null;
     sede?: string | null;
+    comision_codigo?: string | null;
+    anual?: boolean;
   }>,
   franjas: Array<unknown>,
   sedesPermitidas: string[],
@@ -116,9 +122,11 @@ export function seleccionUsesProFilters(
   if (minDiasSemana != null || maxDiasSemana != null) return true;
   if (minHorasDia != null || maxHorasDia != null) return true;
   for (const m of materias) {
-    if (m.catedra_id !== null) return true;
     if (m.profesores !== null) return true;
     if (m.sede) return true;
+    if (m.anual) continue;
+    if (m.catedra_id !== null) return true;
+    if (m.comision_codigo) return true;
   }
   return false;
 }

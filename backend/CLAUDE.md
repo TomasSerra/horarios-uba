@@ -75,9 +75,9 @@ API en **Vercel** (Free) como FastAPI serverless ([docs](https://vercel.com/docs
 | --- | --- | --- | --- |
 | GET | `/health` | — | Healthcheck DB. |
 | GET | `/carreras` | — | Lista de carreras con sus sedes. |
-| GET | `/materias?q=&carrera=` | — | Lista de materias con filtro substring, opcionalmente acotada a una carrera. Devuelve `cant_catedras` (histórico) y `cant_catedras_vigentes`. |
+| GET | `/materias?q=&carrera=` | — | Lista de materias con filtro substring, opcionalmente acotada a una carrera. Devuelve `cant_catedras` (histórico), `cant_catedras_vigentes` y `anual`. |
 | GET | `/materias/{codigo}` | — | Materia + cátedras. |
-| GET | `/materias/{codigo}/opciones` | — | Materia + cátedras + profesores únicos. Incluye cátedras no vigentes con `vigente=false`: lo consumen `MateriaCard.tsx` (filtra) y `ReviewDialog.tsx` (no filtra). |
+| GET | `/materias/{codigo}/opciones` | — | Materia + cátedras + profesores únicos + `comisiones` (con `codigo`, para el filtro de Nro de comisión). Incluye cátedras no vigentes con `vigente=false`: lo consumen `MateriaCard.tsx` (filtra) y `ReviewDialog.tsx` (no filtra). |
 | GET | `/catedras/{id}` | — | Cátedra + todos sus cursos con `obliga_a` resuelto. |
 | GET | `/cursos?...&incluir_obliga=` | — | Búsqueda flexible. |
 | POST | `/planes` | `optional_user` | Si el usuario es Pro, aplica filtros completos y cap 100. Si no, anula filtros y capea a 15. |
@@ -124,12 +124,32 @@ Las guardas viven en [scraper/vigencia.py](scraper/vigencia.py) (`evaluar_sweep`
 
 **Rollback**: `UPDATE catedras SET vigente = TRUE;`. Como no se borra nada, es total e instantáneo.
 
+### Materias anuales
+
+Hay materias que se cursan todo el año (`materias.anual`) pero que la fuente sólo publica en el índice del 1er cuatrimestre. Sin protección, el sweep del 2do las daría de baja y el alumno que las está cursando no podría sumarlas a un plan.
+
+- **Fuente de verdad**: la constante `MATERIAS_ANUALES` en [scraper/config.py](scraper/config.py). `sync_materias_anuales` la baja a la columna antes de cada sweep, así que sacar un código de ahí lo desmarca solo. El `--dry-run-sweep` **no** sincroniza (es read-only): lee el flag como esté en la DB.
+- **Exención**: sólo cuando la materia **entera** está ausente del índice de esa corrida (CTE `anuales_ausentes` en [scraper/db.py](scraper/db.py), compartido por el UPDATE y los dos listados). Si la fuente sí la publica, sus cátedras se barren normal — una cátedra discontinuada no queda fantasma para siempre.
+- **Cursos**: `replace_cursos` no vacía una cátedra de materia anual cuando el detalle viene sin cursos. Es el único caso donde se perderían horarios sin que ninguna corrida futura los repusiera.
+- La exención sólo protege lo que ya está `vigente`. Una cátedra apagada por un sweep anterior se reactiva a mano (`UPDATE catedras SET vigente = TRUE`).
+- **Paywall**: en materias anuales los filtros de **cátedra y comisión son gratis** (`_request_uses_filters` recibe el set de anuales; ver [api/main.py](api/main.py)). Profesores y sede siguen siendo Pro en todas.
+
+#### `oferta_congelada` y `solo_con_cupos`
+
+`materias.oferta_congelada` dice que los datos publicados de esa materia son los de un cuatrimestre anterior. La escribe `marcar_oferta_congelada` en el mismo bloque del sweep y a partir del mismo CTE: una anual ausente del índice está congelada; cuando la fuente vuelve a publicarla (1er cuatrimestre) el flag se apaga solo en esa corrida.
+
+**No hay noción de fechas ni de "cuatrimestre actual" en el código a propósito**: el calendario de la facultad se mueve todos los años, y el índice de la fuente ya es la señal exacta. Separación de responsabilidades: `anual` es **configuración** (la escribe `MATERIAS_ANUALES`), `oferta_congelada` es **estado observado** (lo escribe el scraper).
+
+Lo consume `solo_con_cupos` en [api/planes.py](api/planes.py): sobre una materia congelada el filtro no aplica, porque sus `vacantes` son del cuatrimestre pasado y dejarían afuera a quien ya la está cursando. En el 1er cuatrimestre la misma materia filtra normal. `_materias_con_oferta_congelada` sólo se consulta cuando el request trae `solo_con_cupos`.
+
 ## Generador de planes ([api/planes.py](api/planes.py))
 
 1. Por materia, traer todas las opciones (`comision + obligas`).
-2. Filtrar por `catedra_id` si vino, por profesores permitidos (semántica: `None` = todos, `[]` = ninguno → 0 opciones, lista = subset), y por restricciones de día/franja/sede.
+2. Filtrar por `catedra_id` si vino, por `comision_codigo` dentro de esa cátedra (requiere `catedra_id`: los códigos de comisión se repiten entre cátedras), por profesores permitidos (semántica: `None` = todos, `[]` = ninguno → 0 opciones, lista = subset), y por restricciones de día/franja/sede.
 3. Si alguna materia queda sin opciones válidas → response con `materias_sin_opciones`.
 4. `itertools.product(*opciones_validas)` y para cada combo chequear solapamientos. Cortar al alcanzar `max_planes`.
+
+`solo_con_cupos` se saltea en las materias con `oferta_congelada` (ver [Materias anuales](#materias-anuales)).
 
 Notas:
 - `total_generados` = combos evaluados hasta el corte (no = combos totales del producto).

@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import time
 
 import pytest
+from pydantic import ValidationError
 
 from api.planes import (
     FranjaExcluida,
@@ -362,6 +363,87 @@ class TestCatedraId:
         assert 1 in resp.materias_sin_opciones
 
 
+# ----------------------------- Filtro: comisión -------------------------------
+
+class TestComisionCodigo:
+    """Fija la comisión exacta que se está cursando (materias anuales)."""
+
+    def _setup_dos_comisiones(self, fake_conn):
+        setup_planes_db(fake_conn, [
+            make_comision_row(comision_id=100, comision_codigo="1", materia_codigo=1,
+                              catedra_id=10, dia="lunes",
+                              hora_inicio=time(10, 0), hora_fin=time(12, 0)),
+            make_comision_row(comision_id=101, comision_codigo="2", materia_codigo=1,
+                              catedra_id=10, dia="martes",
+                              hora_inicio=time(10, 0), hora_fin=time(12, 0)),
+        ])
+
+    def test_restringe_a_la_comision(self, fake_conn):
+        self._setup_dos_comisiones(fake_conn)
+        resp = armar_planes(fake_conn, _req([
+            MateriaSeleccionada(codigo=1, catedra_id=10, comision_codigo="2"),
+        ]))
+        assert len(resp.planes) == 1
+        assert resp.planes[0].opciones[0].cursos[0].codigo == "2"
+
+    def test_comision_de_otra_catedra_no_se_cuela(self, fake_conn):
+        # Los códigos de comisión se repiten entre cátedras: el filtro de cátedra
+        # tiene que acotar antes que el de comisión.
+        setup_planes_db(fake_conn, [
+            make_comision_row(comision_id=100, comision_codigo="1", materia_codigo=1,
+                              catedra_id=10, dia="lunes"),
+            make_comision_row(comision_id=200, comision_codigo="1", materia_codigo=1,
+                              catedra_id=20, dia="martes"),
+        ])
+        resp = armar_planes(fake_conn, _req([
+            MateriaSeleccionada(codigo=1, catedra_id=20, comision_codigo="1"),
+        ]))
+        assert len(resp.planes) == 1
+        assert resp.planes[0].opciones[0].catedra_id == 20
+
+    def test_comision_inexistente_da_materia_sin_opciones(self, fake_conn):
+        self._setup_dos_comisiones(fake_conn)
+        resp = armar_planes(fake_conn, _req([
+            MateriaSeleccionada(codigo=1, catedra_id=10, comision_codigo="99"),
+        ]))
+        assert resp.planes == []
+        assert 1 in resp.materias_sin_opciones
+
+    def test_combinado_con_dias_excluidos_y_solo_con_cupos(self, fake_conn):
+        setup_planes_db(fake_conn, [
+            make_comision_row(comision_id=100, comision_codigo="1", materia_codigo=1,
+                              catedra_id=10, dia="lunes", vacantes=5),
+            make_comision_row(comision_id=101, comision_codigo="2", materia_codigo=1,
+                              catedra_id=10, dia="martes", vacantes=0),
+            make_comision_row(comision_id=102, comision_codigo="3", materia_codigo=1,
+                              catedra_id=10, dia="sabado", vacantes=8),
+        ])
+        # La 2 se cae por cupos, la 3 por día: sólo sobrevive la 1.
+        resp = armar_planes(fake_conn, _req(
+            [MateriaSeleccionada(codigo=1, catedra_id=10, comision_codigo="1")],
+            dias_excluidos=["sabado"],
+            solo_con_cupos=True,
+        ))
+        assert len(resp.planes) == 1
+        assert resp.planes[0].opciones[0].cursos[0].codigo == "1"
+
+    def test_comision_elegida_sin_cupos_da_materia_sin_opciones(self, fake_conn):
+        setup_planes_db(fake_conn, [
+            make_comision_row(comision_id=100, comision_codigo="1", materia_codigo=1,
+                              catedra_id=10, dia="lunes", vacantes=0),
+        ])
+        resp = armar_planes(fake_conn, _req(
+            [MateriaSeleccionada(codigo=1, catedra_id=10, comision_codigo="1")],
+            solo_con_cupos=True,
+        ))
+        assert 1 in resp.materias_sin_opciones
+
+    def test_sin_catedra_id_es_invalido(self):
+        # El código de comisión sólo es único dentro de una cátedra.
+        with pytest.raises(ValidationError):
+            MateriaSeleccionada(codigo=1, comision_codigo="1")
+
+
 # ----------------------------- Filtro: profesores (semántica triple) ----------
 
 class TestProfesores:
@@ -466,6 +548,75 @@ class TestSoloConCupos:
         setup_planes_db(fake_conn, comisiones, obligas)
         resp = armar_planes(fake_conn, _req([MateriaSeleccionada(codigo=1)], solo_con_cupos=True))
         assert len(resp.planes) == 1
+
+
+class TestSoloConCuposOfertaCongelada:
+    """En una materia con la oferta congelada los cupos son del cuatrimestre
+    anterior: filtrarlos dejaría afuera a quien ya la está cursando."""
+
+    def _sin_cupos(self):
+        return [
+            make_comision_row(comision_id=100, comision_codigo="01", materia_codigo=1,
+                              catedra_id=10, dia="lunes", vacantes=0),
+            make_comision_row(comision_id=101, comision_codigo="02", materia_codigo=1,
+                              catedra_id=10, dia="martes", vacantes=None),
+        ]
+
+    def test_congelada_ignora_el_filtro(self, fake_conn):
+        setup_planes_db(fake_conn, self._sin_cupos(), congeladas=(1,))
+        resp = armar_planes(
+            fake_conn, _req([MateriaSeleccionada(codigo=1)], solo_con_cupos=True)
+        )
+        assert len(resp.planes) == 2
+
+    def test_no_congelada_sigue_filtrando(self, fake_conn):
+        # Misma materia en el 1er cuatrimestre (la fuente la publica): el filtro
+        # tiene que aplicar normal, que es justo lo que no debe romperse.
+        setup_planes_db(fake_conn, self._sin_cupos(), congeladas=())
+        resp = armar_planes(
+            fake_conn, _req([MateriaSeleccionada(codigo=1)], solo_con_cupos=True)
+        )
+        assert resp.planes == []
+        assert 1 in resp.materias_sin_opciones
+
+    def test_la_exencion_es_por_materia(self, fake_conn):
+        # La congelada pasa sin cupos; la otra materia se filtra igual que siempre.
+        comisiones = self._sin_cupos()[:1] + [
+            make_comision_row(comision_id=200, materia_codigo=2, catedra_id=20,
+                              dia="miercoles", vacantes=0),
+        ]
+        setup_planes_db(fake_conn, comisiones, congeladas=(1,))
+        resp = armar_planes(
+            fake_conn,
+            _req(
+                [MateriaSeleccionada(codigo=1), MateriaSeleccionada(codigo=2)],
+                solo_con_cupos=True,
+            ),
+        )
+        assert resp.planes == []
+        assert resp.materias_sin_opciones == [2]
+
+    def test_congelada_no_saltea_los_demas_filtros(self, fake_conn):
+        # La exención es sólo sobre cupos: día y comisión siguen aplicando.
+        setup_planes_db(fake_conn, self._sin_cupos(), congeladas=(1,))
+        resp = armar_planes(
+            fake_conn,
+            _req(
+                [MateriaSeleccionada(codigo=1, catedra_id=10, comision_codigo="01")],
+                solo_con_cupos=True,
+                dias_excluidos=["lunes"],
+            ),
+        )
+        assert resp.planes == []
+        assert 1 in resp.materias_sin_opciones
+
+    def test_sin_solo_con_cupos_no_se_consulta(self, fake_conn):
+        # El round-trip extra sólo se paga cuando puede cambiar el resultado.
+        setup_planes_db(fake_conn, self._sin_cupos(), congeladas=(1,))
+        armar_planes(fake_conn, _req([MateriaSeleccionada(codigo=1)]))
+        assert not any(
+            "oferta_congelada" in sql for sql, _ in fake_conn.executed
+        )
 
 
 # ----------------------------- Filtro: max_bache_horas ------------------------

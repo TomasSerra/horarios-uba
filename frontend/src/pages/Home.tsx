@@ -61,6 +61,7 @@ import { useVisualViewportStick } from "@/lib/useVisualViewportStick";
 
 interface SeleccionConNombre extends MateriaSeleccionada {
   nombre: string;
+  anual: boolean;
 }
 
 interface PagoErrorState {
@@ -345,7 +346,13 @@ function BrushCleaning({ className }: { className?: string }) {
 }
 
 interface UrlState {
-  m: { c: number; ca: number | null; p: string[] | null; se?: string | null }[];
+  m: {
+    c: number;
+    ca: number | null;
+    p: string[] | null;
+    se?: string | null;
+    co?: string | null;
+  }[];
   d: string[];
   f: FranjaExcluida[];
   s: string[];
@@ -439,44 +446,57 @@ export function Home() {
     if (!q) return;
     const decoded = decodeUrlState(q);
     if (!decoded) return;
-    // Si el usuario no es Pro pero la URL trae filtros Pro (compartida por un
-    // Pro o editada a mano), strippeamos los campos Pro y avisamos. Mantenemos
-    // dias_excluidos y solo_con_cupos que son free.
-    const proFiltersInUrl =
-      !isPaid &&
-      ((decoded.f && decoded.f.length > 0) ||
-        (decoded.s && decoded.s.length > 0) ||
-        decoded.b != null ||
-        decoded.dmin != null ||
-        decoded.dmax != null ||
-        decoded.hmin != null ||
-        decoded.hmax != null ||
-        decoded.m.some(
-          (x) => x.ca !== null || x.p !== null || (x.se ?? null) !== null,
-        ));
-    const safeDecoded = proFiltersInUrl
-      ? {
-          ...decoded,
-          m: decoded.m.map((x) => ({ c: x.c, ca: null, p: null, se: null })),
-          f: [],
-          s: [],
-          b: null,
-          dmin: null,
-          dmax: null,
-          hmin: null,
-          hmax: null,
-        }
-      : decoded;
     (async () => {
       try {
         const all = await api.listMateriasCached();
-        const byCodigo = new Map(all.map((m) => [m.codigo, m.nombre]));
+        const byCodigo = new Map(all.map((m) => [m.codigo, m]));
+        // Qué es Pro depende de la materia: en las anuales cátedra y comisión
+        // son libres, así que el strip necesita la lista antes de decidir.
+        const esAnual = (codigo: number) => byCodigo.get(codigo)?.anual ?? false;
+        // Si el usuario no es Pro pero la URL trae filtros Pro (compartida por un
+        // Pro o editada a mano), strippeamos los campos Pro y avisamos. Mantenemos
+        // dias_excluidos y solo_con_cupos que son free.
+        const proFiltersInUrl =
+          !isPaid &&
+          ((decoded.f && decoded.f.length > 0) ||
+            (decoded.s && decoded.s.length > 0) ||
+            decoded.b != null ||
+            decoded.dmin != null ||
+            decoded.dmax != null ||
+            decoded.hmin != null ||
+            decoded.hmax != null ||
+            decoded.m.some(
+              (x) =>
+                x.p !== null ||
+                (x.se ?? null) !== null ||
+                (!esAnual(x.c) &&
+                  (x.ca !== null || (x.co ?? null) !== null)),
+            ));
+        const safeDecoded = proFiltersInUrl
+          ? {
+              ...decoded,
+              m: decoded.m.map((x) =>
+                esAnual(x.c)
+                  ? { c: x.c, ca: x.ca, p: null, se: null, co: x.co ?? null }
+                  : { c: x.c, ca: null, p: null, se: null, co: null },
+              ),
+              f: [],
+              s: [],
+              b: null,
+              dmin: null,
+              dmax: null,
+              hmin: null,
+              hmax: null,
+            }
+          : decoded;
         const seleccion: SeleccionConNombre[] = safeDecoded.m.map((x) => ({
           codigo: x.c,
           catedra_id: x.ca,
           profesores: x.p,
           sede: x.se ?? null,
-          nombre: byCodigo.get(x.c) ?? `Materia ${x.c}`,
+          comision_codigo: x.co ?? null,
+          anual: esAnual(x.c),
+          nombre: byCodigo.get(x.c)?.nombre ?? `Materia ${x.c}`,
         }));
         const bache = safeDecoded.b ?? null;
         const sc = safeDecoded.sc ?? false;
@@ -578,12 +598,15 @@ export function Home() {
   const currentSignature = useMemo(
     () =>
       JSON.stringify({
-        materias: materias.map(({ codigo, catedra_id, profesores, sede }) => ({
-          codigo,
-          catedra_id,
-          profesores,
-          sede: sede ?? null,
-        })),
+        materias: materias.map(
+          ({ codigo, catedra_id, profesores, sede, comision_codigo }) => ({
+            codigo,
+            catedra_id,
+            profesores,
+            sede: sede ?? null,
+            comision_codigo: comision_codigo ?? null,
+          }),
+        ),
         diasPermitidos: [...diasPermitidos].sort(),
         franjas,
         sedesPermitidas: [...sedesPermitidas].sort(),
@@ -673,11 +696,12 @@ export function Home() {
       const data = await api.postPlanes(
         {
           materias: seleccion.map(
-            ({ codigo, catedra_id, profesores, sede }) => ({
+            ({ codigo, catedra_id, profesores, sede, comision_codigo }) => ({
               codigo,
               catedra_id,
               profesores,
               sede: sede ?? null,
+              comision_codigo: comision_codigo ?? null,
             }),
           ),
           dias_excluidos,
@@ -696,12 +720,15 @@ export function Home() {
       scrollOnNextResultRef.current = true;
       setResultado(data);
       const sig = JSON.stringify({
-        materias: seleccion.map(({ codigo, catedra_id, profesores, sede }) => ({
-          codigo,
-          catedra_id,
-          profesores,
-          sede: sede ?? null,
-        })),
+        materias: seleccion.map(
+          ({ codigo, catedra_id, profesores, sede, comision_codigo }) => ({
+            codigo,
+            catedra_id,
+            profesores,
+            sede: sede ?? null,
+            comision_codigo: comision_codigo ?? null,
+          }),
+        ),
         diasPermitidos: [...dias].sort(),
         franjas: franjasExcl,
         sedesPermitidas: [...sedes].sort(),
@@ -730,6 +757,8 @@ export function Home() {
           catedra_label: null,
           profesores: m.profesores,
           sede: m.sede ?? null,
+          comision_codigo: m.comision_codigo ?? null,
+          anual: m.anual,
         })),
       };
       setLastGeneratedFilters(filtersSnapshot);
@@ -737,11 +766,12 @@ export function Home() {
         pushHistory(uid, {
           request: {
             materias: seleccion.map(
-              ({ codigo, catedra_id, profesores, sede }) => ({
+              ({ codigo, catedra_id, profesores, sede, comision_codigo }) => ({
                 codigo,
                 catedra_id,
                 profesores,
                 sede: sede ?? null,
+                comision_codigo: comision_codigo ?? null,
               }),
             ),
             dias_excluidos,
@@ -765,6 +795,7 @@ export function Home() {
           ca: m.catedra_id,
           p: m.profesores,
           se: m.sede ?? null,
+          co: m.comision_codigo ?? null,
         })),
         d: dias,
         f: franjasExcl,
@@ -856,9 +887,11 @@ export function Home() {
     const seleccion: SeleccionConNombre[] = entry.filters.materias.map((m) => ({
       codigo: m.codigo,
       nombre: m.nombre,
+      anual: m.anual ?? false,
       catedra_id: m.catedra_id,
       profesores: m.profesores,
       sede: m.sede ?? null,
+      comision_codigo: m.comision_codigo ?? null,
     }));
     const dias = ALL_DIAS.filter(
       (d) => !entry.filters.dias_excluidos.includes(d),
@@ -887,12 +920,15 @@ export function Home() {
     setError(false);
     setLastGeneratedSignature(
       JSON.stringify({
-        materias: seleccion.map(({ codigo, catedra_id, profesores, sede }) => ({
-          codigo,
-          catedra_id,
-          profesores,
-          sede: sede ?? null,
-        })),
+        materias: seleccion.map(
+          ({ codigo, catedra_id, profesores, sede, comision_codigo }) => ({
+            codigo,
+            catedra_id,
+            profesores,
+            sede: sede ?? null,
+            comision_codigo: comision_codigo ?? null,
+          }),
+        ),
         diasPermitidos: [...dias].sort(),
         franjas: entry.filters.franjas_excluidas,
         sedesPermitidas: [...entry.filters.sedes_permitidas].sort(),
@@ -911,6 +947,7 @@ export function Home() {
         ca: m.catedra_id,
         p: m.profesores,
         se: m.sede ?? null,
+        co: m.comision_codigo ?? null,
       })),
       d: dias,
       f: entry.filters.franjas_excluidas,

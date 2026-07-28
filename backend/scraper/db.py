@@ -67,12 +67,29 @@ def upsert_catedra(
     )
 
 
+def es_materia_anual(conn: psycopg.Connection, materia_codigo: int) -> bool:
+    row = conn.execute(
+        "SELECT anual FROM materias WHERE codigo = %s", (materia_codigo,)
+    ).fetchone()
+    return bool(row and row[0])
+
+
 def replace_cursos(conn: psycopg.Connection, detalle: CatedraDetalle) -> None:
     """Reemplaza los cursos de la cátedra: borra todo y re-inserta.
 
     Más simple y robusto que upsert por (catedra, tipo, codigo) cuando una
     comisión deja de existir entre cuatrimestres.
     """
+    if not detalle.cursos and es_materia_anual(conn, detalle.materia_codigo):
+        # Materia anual con detalle vacío: la fuente la publica un solo
+        # cuatrimestre, así que vaciarla acá borraría los horarios que se están
+        # cursando y no habría corrida que los repusiera.
+        print(
+            f"  catedra={detalle.catedra_id}: materia anual sin cursos en la fuente, "
+            f"se conservan los guardados"
+        )
+        return
+
     conn.execute("DELETE FROM cursos WHERE catedra_id = %s", (detalle.catedra_id,))
     if not detalle.cursos:
         return
@@ -142,6 +159,40 @@ def contar_vigentes(conn: psycopg.Connection) -> int:
     return row[0] if row else 0
 
 
+def sync_materias_anuales(conn: psycopg.Connection, codigos: Iterable[int]) -> int:
+    """Sincroniza `materias.anual` con la lista del código. Devuelve filas tocadas.
+
+    La constante `MATERIAS_ANUALES` es la fuente de verdad: sacar un código de ahí
+    lo desmarca en la corrida siguiente. El `WHERE` evita reescribir toda la tabla
+    en cada corrida.
+    """
+    ids = list(codigos)
+    return conn.execute(
+        """
+        UPDATE materias SET anual = (codigo = ANY(%(ids)s))
+         WHERE anual <> (codigo = ANY(%(ids)s))
+        """,
+        {"ids": ids},
+    ).rowcount
+
+
+# Materias anuales que no figuran en el índice de esta corrida. Se cursan todo el
+# año pero la fuente sólo las publica en el 1er cuatrimestre, así que su ausencia
+# no significa que se dejaron de dictar. Si la materia SÍ aparece, sus cátedras se
+# barren normal: ahí la ausencia de una cátedra puntual sí es información.
+_ANUALES_AUSENTES_CTE = """
+    WITH anuales_ausentes AS (
+        SELECT m.codigo
+          FROM materias m
+         WHERE m.anual
+           AND NOT EXISTS (
+               SELECT 1 FROM catedras c
+                WHERE c.materia_codigo = m.codigo AND c.id = ANY(%(vistas)s)
+           )
+    )
+"""
+
+
 def listar_a_dar_de_baja(
     conn: psycopg.Connection, vistas: Iterable[int]
 ) -> list[tuple[int, str | None]]:
@@ -153,16 +204,67 @@ def listar_a_dar_de_baja(
     if not ids:
         return []
     rows = conn.execute(
-        """
+        _ANUALES_AUSENTES_CTE
+        + """
         SELECT ca.id, m.nombre
           FROM catedras ca
           JOIN materias m ON m.codigo = ca.materia_codigo
-         WHERE ca.vigente AND ca.id <> ALL(%s)
+         WHERE ca.vigente AND ca.id <> ALL(%(vistas)s)
+           AND ca.materia_codigo NOT IN (SELECT codigo FROM anuales_ausentes)
          ORDER BY ca.id
         """,
-        (ids,),
+        {"vistas": ids},
     ).fetchall()
     return [(r[0], r[1]) for r in rows]
+
+
+def listar_exentas_por_anual(
+    conn: psycopg.Connection, vistas: Iterable[int]
+) -> list[tuple[int, str | None]]:
+    """Cátedras vigentes que se salvan del sweep por pertenecer a una materia anual."""
+    ids = list(vistas)
+    if not ids:
+        return []
+    rows = conn.execute(
+        _ANUALES_AUSENTES_CTE
+        + """
+        SELECT ca.id, m.nombre
+          FROM catedras ca
+          JOIN materias m ON m.codigo = ca.materia_codigo
+         WHERE ca.vigente AND ca.id <> ALL(%(vistas)s)
+           AND ca.materia_codigo IN (SELECT codigo FROM anuales_ausentes)
+         ORDER BY ca.id
+        """,
+        {"vistas": ids},
+    ).fetchall()
+    return [(r[0], r[1]) for r in rows]
+
+
+def marcar_oferta_congelada(conn: psycopg.Connection, vistas: Iterable[int]) -> int:
+    """Marca las materias cuyos datos publicados son de un cuatrimestre anterior.
+
+    Es el mismo hecho que exime a una anual del sweep: la fuente dejó de
+    publicarla. Lo consume `solo_con_cupos`, que no puede aplicar sobre cupos
+    viejos — el alumno de una anual ya está cursando aunque figure sin vacantes.
+
+    Va detrás de las guardas de `evaluar_sweep`: con un índice a medio cargar no
+    se puede concluir que una materia dejó de publicarse.
+    """
+    ids = list(vistas)
+    if not ids:
+        raise ValueError("marcar_oferta_congelada: lista de vistas vacía, se aborta")
+    # El `WHERE` evita reescribir la tabla entera y, de paso, apaga el flag de una
+    # materia que dejó de estar en MATERIAS_ANUALES (nunca entra en el CTE).
+    return conn.execute(
+        _ANUALES_AUSENTES_CTE
+        + """
+        UPDATE materias m
+           SET oferta_congelada = (m.codigo IN (SELECT codigo FROM anuales_ausentes))
+         WHERE m.oferta_congelada
+               <> (m.codigo IN (SELECT codigo FROM anuales_ausentes))
+        """,
+        {"vistas": ids},
+    ).rowcount
 
 
 def dar_de_baja_no_vistas(conn: psycopg.Connection, vistas: Iterable[int]) -> int:
@@ -179,8 +281,13 @@ def dar_de_baja_no_vistas(conn: psycopg.Connection, vistas: Iterable[int]) -> in
     if not ids:
         raise ValueError("dar_de_baja_no_vistas: lista de vistas vacía, se aborta")
     return conn.execute(
-        "UPDATE catedras SET vigente = FALSE WHERE vigente AND id <> ALL(%s)",
-        (ids,),
+        _ANUALES_AUSENTES_CTE
+        + """
+        UPDATE catedras SET vigente = FALSE
+         WHERE vigente AND id <> ALL(%(vistas)s)
+           AND materia_codigo NOT IN (SELECT codigo FROM anuales_ausentes)
+        """,
+        {"vistas": ids},
     ).rowcount
 
 

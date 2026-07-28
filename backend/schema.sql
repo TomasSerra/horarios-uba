@@ -16,14 +16,26 @@ INSERT INTO carreras (slug, nombre, sort_order) VALUES
     ('licenciatura-terap-ocup',    'Licenciatura en Terapia Ocupacional', 4)
 ON CONFLICT (slug) DO NOTHING;
 
+-- `anual` marca las materias que se cursan todo el año. La fuente sólo las
+-- publica en el índice de inscripción del 1er cuatrimestre, así que en el 2do
+-- desaparecen: sin este flag el sweep del scraper las daría de baja y no se
+-- podrían sumar a un plan. Ver `MATERIAS_ANUALES` en scraper/config.py.
+-- `oferta_congelada` marca que los datos publicados de la materia son los de un
+-- cuatrimestre anterior. Sólo les pasa a las anuales, y el scraper lo deriva del
+-- mismo hecho que las exime del sweep: la fuente dejó de publicarlas. `anual` es
+-- configuración (la escribe MATERIAS_ANUALES); esta es estado observado.
 CREATE TABLE IF NOT EXISTS materias (
-    codigo  INTEGER PRIMARY KEY,
-    nombre  TEXT NOT NULL,
-    carrera TEXT REFERENCES carreras(slug)
+    codigo            INTEGER PRIMARY KEY,
+    nombre            TEXT NOT NULL,
+    carrera           TEXT REFERENCES carreras(slug),
+    anual             BOOLEAN NOT NULL DEFAULT FALSE,
+    oferta_congelada  BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 -- Para DBs preexistentes (Neon) que ya tenían materias sin la columna.
 ALTER TABLE materias ADD COLUMN IF NOT EXISTS carrera TEXT REFERENCES carreras(slug);
+ALTER TABLE materias ADD COLUMN IF NOT EXISTS anual BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE materias ADD COLUMN IF NOT EXISTS oferta_congelada BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE INDEX IF NOT EXISTS idx_materias_carrera ON materias(carrera);
 

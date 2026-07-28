@@ -30,6 +30,16 @@ def test_client_error_payload_invalido_es_422():
     assert "detail" in res.json()
 
 
+def test_error_de_validador_custom_es_422_serializable():
+    # Los validadores custom (model_validator) meten la ValueError original en
+    # `ctx`, que json.dumps no serializa: sin el encoder esto devolvía 500.
+    res = client.post(
+        "/planes", json={"materias": [{"codigo": 4, "comision_codigo": "1"}]}
+    )
+    assert res.status_code == 422
+    assert "comision_codigo requiere catedra_id" in res.text
+
+
 def test_http_exception_devuelve_detail():
     # Ruta inexistente → 404 formado por el handler de HTTPException.
     res = client.get("/ruta-que-no-existe")

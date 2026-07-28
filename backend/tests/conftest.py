@@ -111,8 +111,32 @@ class FakeConn:
             f"Reglas registradas: {[r['match'] for r in self._rules]}"
         )
 
+    def cursor(self):
+        return _FakeCursorCtx(self)
+
     def commit(self):
         self.commits += 1
+
+
+class _FakeCursorCtx:
+    """`with conn.cursor() as cur: cur.executemany(...)` — lo usa replace_cursos."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self.executemany_calls = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def executemany(self, sql, rows):
+        self.executemany_calls.append((sql, list(rows)))
+        self._conn.executed.append((sql, list(rows)))
+
+    def execute(self, sql, params=None):
+        return self._conn.execute(sql, params)
 
 
 class _FakePoolCtx:
@@ -214,11 +238,15 @@ def make_obliga_row(
     }
 
 
-def setup_planes_db(fake_conn, comision_rows, obliga_rows=None):
-    """Registra las dos queries que ejecuta _fetch_opciones_por_materia:
+def setup_planes_db(fake_conn, comision_rows, obliga_rows=None, congeladas=()):
+    """Registra las queries que ejecuta armar_planes:
     1) FROM materias m JOIN catedras ca JOIN cursos com ...
     2) FROM comision_obliga co JOIN cursos t ...
+    3) materias con la oferta congelada (sólo si el request trae solo_con_cupos).
     """
     fake_conn.on("from materias m", rows=comision_rows)
     fake_conn.on("from comision_obliga co", rows=obliga_rows or [])
+    fake_conn.on(
+        "where oferta_congelada", rows=[{"codigo": c} for c in congeladas]
+    )
     return fake_conn

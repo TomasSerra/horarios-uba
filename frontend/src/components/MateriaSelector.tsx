@@ -30,6 +30,7 @@ import type { MateriaListItem, MateriaSeleccionada } from "@/lib/types";
 
 interface SeleccionConNombre extends MateriaSeleccionada {
   nombre: string;
+  anual: boolean;
 }
 
 interface Props {
@@ -162,7 +163,15 @@ export function MateriaSelector({ selected, onChange }: Props) {
 
   function add(m: MateriaListItem) {
     onChange([
-      { codigo: m.codigo, nombre: m.nombre, catedra_id: null, profesores: null, sede: null },
+      {
+        codigo: m.codigo,
+        nombre: m.nombre,
+        anual: m.anual,
+        catedra_id: null,
+        profesores: null,
+        sede: null,
+        comision_codigo: null,
+      },
       ...selected,
     ]);
     setOpen(false);
@@ -341,6 +350,7 @@ export function MateriaSelector({ selected, onChange }: Props) {
             <MateriaCard
               key={m.codigo}
               nombre={m.nombre}
+              anual={m.anual}
               seleccion={m}
               onChange={(s) => update(m.codigo, s)}
               onRemove={() => remove(m.codigo)}

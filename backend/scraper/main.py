@@ -5,13 +5,16 @@ import sys
 import time
 from collections import Counter
 
-from .config import CATEDRA_URL, DELAY_SECONDS
+from .config import CATEDRA_URL, DELAY_SECONDS, MATERIAS_ANUALES
 from .db import (
     contar_vigentes,
     dar_de_baja_no_vistas,
     get_conn,
     listar_a_dar_de_baja,
+    listar_exentas_por_anual,
+    marcar_oferta_congelada,
     save_detalle,
+    sync_materias_anuales,
 )
 from .discover import IndexEntry, discover_catedras
 from .http import fetch
@@ -86,18 +89,37 @@ def dar_de_baja_ausentes(
             print(f"Baja de cátedras OMITIDA: {decision.motivo}")
             return False
 
+        exentas = listar_exentas_por_anual(conn, descubiertas)
+
         if dry_run:
             pendientes = listar_a_dar_de_baja(conn, descubiertas)
             print(f"[dry-run] {decision.motivo}")
             print(f"[dry-run] se darían de baja {len(pendientes)} cátedras:")
             for cid, materia in pendientes:
                 print(f"[dry-run]   catedra={cid}: {materia}")
+            _print_exentas(exentas, prefix="[dry-run] ")
             return True
 
         bajas = dar_de_baja_no_vistas(conn, descubiertas)
         print(f"Baja de cátedras: {decision.motivo}")
         print(f"  {bajas} marcadas como no vigentes (no se borró ninguna fila)")
+        _print_exentas(exentas)
+
+        congeladas = marcar_oferta_congelada(conn, descubiertas)
+        if congeladas:
+            print(f"  {congeladas} materias cambiaron de estado de oferta congelada")
     return True
+
+
+def _print_exentas(exentas: list[tuple[int, str | None]], prefix: str = "") -> None:
+    if not exentas:
+        return
+    print(
+        f"{prefix}  {len(exentas)} cátedras exentas "
+        f"(materias anuales ausentes del índice):"
+    )
+    for cid, materia in exentas:
+        print(f"{prefix}    catedra={cid}: {materia}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -164,6 +186,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run_sweep:
         # Preview read-only: se saltea el scrapeo para que sea rápido y para no
         # escribir nada. Sirve para eyeballear el impacto antes de la corrida real.
+        # Tampoco sincroniza `materias.anual`: lee el flag como está en la DB, así
+        # que la primera vez puede no reflejar cambios en MATERIAS_ANUALES.
         ok = dar_de_baja_ausentes(descubiertas, forzar=args.force_sweep, dry_run=True)
         return 0 if ok else 1
 
@@ -173,6 +197,12 @@ def main(argv: list[str] | None = None) -> int:
 
     scrape_many(entries, args.delay)
     print()
+
+    # Antes del sweep: es el flag que decide qué cátedras quedan exentas.
+    with get_conn() as conn:
+        tocadas = sync_materias_anuales(conn, MATERIAS_ANUALES)
+    if tocadas:
+        print(f"Materias anuales: {tocadas} filas actualizadas en materias.anual")
 
     if args.limit is not None:
         # Con --limit se procesó un subconjunto: dar de baja acá sería incorrecto.

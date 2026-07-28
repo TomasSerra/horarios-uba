@@ -10,6 +10,9 @@ export interface MateriaListItem {
   // oculta del selector del armador de planes. Siempre presente: las requests
   // llevan `?v=DATA_VERSION`, así que nunca se sirve un payload viejo (ver api.ts).
   cant_catedras_vigentes: number;
+  // Se cursa todo el año: la fuente sólo la publica en el 1er cuatrimestre. En
+  // estas materias los filtros de cátedra y comisión son gratis.
+  anual: boolean;
 }
 
 export interface CursoSummary {
@@ -56,6 +59,9 @@ export interface MateriaSeleccionada {
   profesores: string[] | null;
   // Sede específica para esta materia. Hace override de sedes_permitidas general.
   sede?: string | null;
+  // Comisión exacta dentro de la cátedra elegida. Requiere catedra_id: los
+  // códigos de comisión se repiten entre cátedras.
+  comision_codigo?: string | null;
 }
 
 export interface PlanRequest {
@@ -73,6 +79,7 @@ export interface PlanRequest {
 }
 
 export interface ComisionOpcion {
+  codigo: string;
   profesor: string | null;
   sede: string | null;
 }
@@ -128,6 +135,10 @@ export interface FavoriteFilters {
     catedra_label: string | null;
     profesores: string[] | null;
     sede?: string | null;
+    comision_codigo?: string | null;
+    // Snapshot: define si cátedra/comisión contaban como filtro Pro. Ausente en
+    // entradas de historial viejas → se asume false (el lado seguro).
+    anual?: boolean;
   }>;
 }
 

@@ -47,6 +47,19 @@ class MateriaSeleccionada(BaseModel):
             "de sedes_permitidas general. None = se aplica el filtro general."
         ),
     )
+    comision_codigo: str | None = Field(
+        default=None,
+        description=(
+            "Código de la comisión a fijar. Requiere catedra_id: los códigos "
+            "de comisión son únicos por cátedra, no globalmente."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _comision_requiere_catedra(self) -> "MateriaSeleccionada":
+        if self.comision_codigo is not None and self.catedra_id is None:
+            raise ValueError("comision_codigo requiere catedra_id")
+        return self
 
 
 class PlanRequest(BaseModel):
@@ -442,11 +455,27 @@ def _fetch_opciones_por_materia(conn, materia_codigos: list[int]) -> dict[int, l
     return opciones_por_materia
 
 
+def _materias_con_oferta_congelada(conn, codigos: list[int]) -> set[int]:
+    rows = conn.execute(
+        "SELECT codigo FROM materias WHERE oferta_congelada AND codigo = ANY(%s)",
+        (codigos,),
+    ).fetchall()
+    return {r["codigo"] for r in rows}
+
+
 def armar_planes(conn, req: PlanRequest) -> PlanResponse:
     dias_excluidos = {d.lower() for d in req.dias_excluidos}
     sedes_permitidas = set(req.sedes_permitidas)
     materia_codigos = [m.codigo for m in req.materias]
     selecciones_por_codigo: dict[int, MateriaSeleccionada] = {m.codigo: m for m in req.materias}
+
+    # Los cupos de una materia con la oferta congelada son los del cuatrimestre
+    # anterior: filtrarlos dejaría afuera a quien ya la está cursando.
+    congeladas = (
+        _materias_con_oferta_congelada(conn, materia_codigos)
+        if req.solo_con_cupos
+        else set()
+    )
 
     opciones_por_materia = _fetch_opciones_por_materia(conn, materia_codigos)
 
@@ -459,6 +488,13 @@ def armar_planes(conn, req: PlanRequest) -> PlanResponse:
         # Filtrar por cátedra elegida (si la hay).
         if seleccion.catedra_id is not None:
             opciones = [op for op in opciones if op.catedra_id == seleccion.catedra_id]
+
+        # Comisión exacta dentro de esa cátedra. `cursos[0]` es siempre la comisión;
+        # el resto son sus teóricos/seminarios obligados.
+        if seleccion.comision_codigo is not None:
+            opciones = [
+                op for op in opciones if op.cursos[0].codigo == seleccion.comision_codigo
+            ]
 
         # Filtrar por profesores permitidos. Semántica:
         #   None  -> sin filtro (todos los profesores permitidos)
@@ -495,7 +531,7 @@ def armar_planes(conn, req: PlanRequest) -> PlanResponse:
 
         # Solo la comisión (siempre cursos[0]) tiene `vacantes`: teóricos y
         # seminarios comparten el cupo vía comision_obliga y vienen con NULL.
-        if req.solo_con_cupos:
+        if req.solo_con_cupos and cod not in congeladas:
             validas = [
                 op for op in validas
                 if op.cursos[0].vacantes is not None and op.cursos[0].vacantes > 0

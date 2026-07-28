@@ -126,7 +126,7 @@ const MATERIAS_TTL_MS = 60 * 60 * 1000;
 // **scraper primero, bump + deploy del FE después**. Al revés queda cacheado el
 // snapshot previo al sweep: trae el campo de vigencia (así que `fetchFresco` lo
 // da por bueno) pero con todas las cátedras todavía vigentes.
-export const DATA_VERSION = 5;
+export const DATA_VERSION = 6;
 
 function withVersion(path: string): string {
   return `${path}${path.includes("?") ? "&" : "?"}v=${DATA_VERSION}`;
@@ -152,9 +152,14 @@ function readMateriasCache(key: string): MateriaListItem[] | null {
     if (version !== MATERIAS_CACHE_VERSION) return null;
     if (typeof expires !== "number" || expires < Date.now()) return null;
     // Puede haber quedado guardado un payload viejo bajo la versión actual (se
-    // escribió antes de que existiera el chequeo de shape). Si le falta el campo
-    // de vigencia lo descartamos: mejor un refetch que un selector vacío.
-    if (data.length > 0 && data[0].cant_catedras_vigentes === undefined) {
+    // escribió antes de que existiera el chequeo de shape). Si le faltan los
+    // campos de vigencia o anualidad lo descartamos: mejor un refetch que un
+    // selector vacío o un filtro Pro mal gateado.
+    if (
+      data.length > 0 &&
+      (data[0].cant_catedras_vigentes === undefined ||
+        data[0].anual === undefined)
+    ) {
       return null;
     }
     return data as MateriaListItem[];
@@ -190,7 +195,9 @@ export const api = {
       withVersion(
         `/materias${carrera ? `?carrera=${encodeURIComponent(carrera)}` : ""}`
       ),
-      (d) => d.length === 0 || d[0].cant_catedras_vigentes !== undefined
+      (d) =>
+        d.length === 0 ||
+        (d[0].cant_catedras_vigentes !== undefined && d[0].anual !== undefined)
     );
     writeMateriasCache(key, data);
     return data;
@@ -198,7 +205,11 @@ export const api = {
   getMateriaOpciones: (codigo: number) =>
     fetchFresco<MateriaOpciones>(
       withVersion(`/materias/${codigo}/opciones`),
-      (d) => d.catedras.length === 0 || d.catedras[0].vigente !== undefined
+      (d) =>
+        d.catedras.length === 0 ||
+        (d.catedras[0].vigente !== undefined &&
+          (d.catedras[0].comisiones.length === 0 ||
+            d.catedras[0].comisiones[0].codigo !== undefined))
     ),
   getMe: (token: string) => request<Me>("/me", undefined, token),
   updateProfile: (
