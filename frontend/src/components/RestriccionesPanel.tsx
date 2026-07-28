@@ -21,6 +21,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { DIAS, type FranjaExcluida } from "@/lib/types";
@@ -50,6 +57,63 @@ function LockedSection({
         />
       )}
     </div>
+  );
+}
+
+// Grilla de horas de las franjas. El rango coincide con el del calendario y con
+// el de la oferta real (ningún curso arranca antes de las 7 ni termina después
+// de las 23), y el paso de 15' con la única granularidad que publica la fuente
+// (los cursos caen siempre en :00, :15, :30 o :45).
+const HORA_MIN = 7;
+const HORA_MAX = 23;
+const PASO_MINUTOS = 15;
+
+const HORAS: string[] = [];
+for (let m = HORA_MIN * 60; m <= HORA_MAX * 60; m += PASO_MINUTOS) {
+  const hh = String(Math.floor(m / 60)).padStart(2, "0");
+  const mm = String(m % 60).padStart(2, "0");
+  HORAS.push(`${hh}:${mm}`);
+}
+
+// Las horas son "HH:MM" con cero a la izquierda, así que comparar y ordenar
+// como strings alcanza: no hace falta parsear a minutos.
+function horaSiguiente(hora: string): string {
+  return HORAS.find((h) => h > hora) ?? HORAS[HORAS.length - 1];
+}
+
+// Selector propio en vez de <input type="time">: el picker nativo de hora tira
+// abajo el webview de los navegadores embebidos de Instagram y TikTok, por
+// donde entra buena parte del tráfico, y el usuario pierde todo lo que había
+// cargado. Esto es DOM puro, así que se comporta igual en cualquier navegador.
+function TimeSelect({
+  value,
+  onChange,
+  options,
+  ariaLabel,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: string[];
+  ariaLabel: string;
+}) {
+  // Un valor fuera de la grilla (favorito viejo o ?q= armado a mano) tiene que
+  // seguir viéndose: sin item que lo matchee, Radix deja el trigger vacío.
+  const items = options.includes(value)
+    ? options
+    : [value, ...options].sort();
+  return (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger aria-label={ariaLabel} className="h-9 w-full max-w-[8rem]">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {items.map((h) => (
+          <SelectItem key={h} value={h}>
+            {h}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 
@@ -266,6 +330,17 @@ export function RestriccionesPanel({
     );
   }
 
+  // Mantener inicio < fin: mover el fin si el nuevo inicio lo alcanza.
+  function setFranjaInicio(idx: number, hora: string) {
+    const f = franjas[idx];
+    updateFranja(
+      idx,
+      hora >= f.hora_fin
+        ? { hora_inicio: hora, hora_fin: horaSiguiente(hora) }
+        : { hora_inicio: hora },
+    );
+  }
+
   function toggleFranjaDia(idx: number, dia: string) {
     const f = franjas[idx];
     const nuevo = f.dias.includes(dia)
@@ -438,22 +513,18 @@ export function RestriccionesPanel({
                         })}
                       </div>
                       <div className="flex items-center gap-2">
-                        <Input
-                          type="time"
+                        <TimeSelect
                           value={f.hora_inicio}
-                          onChange={(e) =>
-                            updateFranja(i, { hora_inicio: e.target.value })
-                          }
-                          className="h-9 w-full max-w-[8rem]"
+                          onChange={(h) => setFranjaInicio(i, h)}
+                          options={HORAS.slice(0, -1)}
+                          ariaLabel="Hora de inicio de la franja"
                         />
                         <span className="text-sm text-muted-foreground">a</span>
-                        <Input
-                          type="time"
+                        <TimeSelect
                           value={f.hora_fin}
-                          onChange={(e) =>
-                            updateFranja(i, { hora_fin: e.target.value })
-                          }
-                          className="h-9 w-full max-w-[8rem]"
+                          onChange={(h) => updateFranja(i, { hora_fin: h })}
+                          options={HORAS.filter((h) => h > f.hora_inicio)}
+                          ariaLabel="Hora de fin de la franja"
                         />
                         <Button
                           variant="ghost"
