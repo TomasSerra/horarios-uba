@@ -166,7 +166,11 @@ function FavoritoCard({
       </CardHeader>
       {expanded && (
         <CardContent>
-          <CalendarioPlan plan={fav.plan} showLeyenda={false} />
+          <CalendarioPlan
+            plan={fav.plan}
+            showLeyenda={false}
+            franjasBloqueadas={fav.filters?.franjas_excluidas}
+          />
         </CardContent>
       )}
     </Card>

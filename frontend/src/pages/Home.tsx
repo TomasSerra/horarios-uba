@@ -1328,7 +1328,13 @@ export function Home() {
               </div>
             </CardHeader>
             <CardContent>
-              <CalendarioPlan plan={planActual} compacto={calendarioCompacto} />
+              <CalendarioPlan
+                plan={planActual}
+                compacto={calendarioCompacto}
+                // Las del último "Generar", no las del panel: el calendario
+                // tiene que coincidir con el plan que se está mostrando.
+                franjasBloqueadas={lastGeneratedFilters?.franjas_excluidas}
+              />
             </CardContent>
           </Card>
         )}

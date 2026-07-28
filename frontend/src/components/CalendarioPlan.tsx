@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import type { Plan, CursoEnPlan } from "@/lib/types";
+import type { Plan, CursoEnPlan, FranjaExcluida } from "@/lib/types";
 import {
   Popover,
   PopoverContent,
@@ -17,6 +17,7 @@ import {
   Clock,
   DoorOpen,
   GraduationCap,
+  Lock,
   MapPin,
   User,
   Users,
@@ -50,6 +51,8 @@ interface Props {
   plan: Plan | null;
   compacto?: boolean;
   showLeyenda?: boolean;
+  // Franjas con las que se generó el plan, para pintarlas como bloqueadas.
+  franjasBloqueadas?: FranjaExcluida[];
 }
 
 export function PlanLeyenda({ plan }: { plan: Plan }) {
@@ -108,6 +111,106 @@ function formatTipo(tipo: string, codigo: string): string {
 function formatHM(t: string | null): string {
   if (!t) return "";
   return t.slice(0, 5);
+}
+
+interface Bloqueo {
+  inicio: number;
+  fin: number;
+}
+
+// Franjas → intervalos por día, recortados a la grilla y fusionados: dos
+// franjas que se pisan tienen que verse como un solo bloque (si no, el rayado
+// se superpone y el rótulo "Bloqueado" aparece repetido).
+function bloqueosPorDia(
+  franjas: FranjaExcluida[],
+  horaMin: number,
+  horaMax: number,
+): Map<string, Bloqueo[]> {
+  const porDia = new Map<string, Bloqueo[]>();
+  franjas.forEach((f) => {
+    const inicio = parseTime(f.hora_inicio);
+    const fin = parseTime(f.hora_fin);
+    if (inicio === null || fin === null) return;
+    const from = Math.max(inicio, horaMin);
+    const to = Math.min(fin, horaMax);
+    if (to <= from) return;
+    f.dias.forEach((dia) => {
+      const acc = porDia.get(dia);
+      if (acc) acc.push({ inicio: from, fin: to });
+      else porDia.set(dia, [{ inicio: from, fin: to }]);
+    });
+  });
+
+  porDia.forEach((intervalos, dia) => {
+    const ordenados = [...intervalos].sort((a, b) => a.inicio - b.inicio);
+    const merged: Bloqueo[] = [];
+    ordenados.forEach((iv) => {
+      const last = merged[merged.length - 1];
+      if (last && iv.inicio <= last.fin) last.fin = Math.max(last.fin, iv.fin);
+      else merged.push({ ...iv });
+    });
+    porDia.set(dia, merged);
+  });
+
+  return porDia;
+}
+
+function hhmm(hora: number): string {
+  const h = Math.floor(hora);
+  const m = Math.round((hora - h) * 60);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function FranjaBloqueadaBloque({
+  bloqueo,
+  compacto,
+  top,
+  height,
+}: {
+  bloqueo: Bloqueo;
+  compacto: boolean;
+  top: number;
+  height: number;
+}) {
+  const rango = `${hhmm(bloqueo.inicio)}–${hhmm(bloqueo.fin)}`;
+  const showLabel = height >= 22;
+  const stacked = height >= 52;
+  const showRango = height >= 62;
+
+  return (
+    <div
+      title={`Bloqueado ${rango}`}
+      className={cn(
+        "absolute inset-x-0 z-0 flex items-center justify-center overflow-hidden",
+        "border-y border-muted-foreground/20 bg-muted-foreground/[0.07] text-foreground/75",
+        compacto ? "text-[9px]" : "text-[10px]",
+      )}
+      style={{
+        top,
+        height,
+        backgroundImage:
+          "repeating-linear-gradient(45deg, transparent 0 5px, hsl(var(--muted-foreground) / 0.16) 5px 7px)",
+      }}
+    >
+      <span className="sr-only">Bloqueado de {rango.replace("–", " a ")}</span>
+      <div
+        className={cn(
+          "flex min-w-0 items-center justify-center gap-1 px-1",
+          stacked && "flex-col gap-0.5",
+        )}
+      >
+        <Lock
+          aria-hidden
+          className={cn("shrink-0", compacto ? "size-2.5" : "size-3")}
+          strokeWidth={2.5}
+        />
+        {showLabel && (
+          <span className="truncate font-semibold leading-none">Bloqueado</span>
+        )}
+        {showRango && <span className="truncate leading-none">{rango}</span>}
+      </div>
+    </div>
+  );
 }
 
 interface CursoBloqueProps {
@@ -216,7 +319,7 @@ function CursoBloque({ curso, compacto, top, height }: CursoBloqueProps) {
   const bloque = (
     <div
       className={cn(
-        "absolute left-1 right-1 cursor-pointer overflow-hidden rounded-md shadow-sm",
+        "absolute left-1 right-1 z-10 cursor-pointer overflow-hidden rounded-md shadow-sm",
         compacto
           ? "flex items-center px-1.5 py-0 text-[10px]"
           : "px-2 py-1.5 text-[11px]",
@@ -295,6 +398,7 @@ export function CalendarioPlan({
   plan,
   compacto = false,
   showLeyenda = true,
+  franjasBloqueadas,
 }: Props) {
   const horaMin = 7;
   const horaMax = 23;
@@ -327,6 +431,11 @@ export function CalendarioPlan({
     });
     return cs;
   }, [plan]);
+
+  const bloqueos = useMemo(
+    () => bloqueosPorDia(franjasBloqueadas ?? [], horaMin, horaMax),
+    [franjasBloqueadas],
+  );
 
   if (!plan) {
     return (
@@ -425,6 +534,16 @@ export function CalendarioPlan({
                     key={h}
                     className="absolute inset-x-0 border-b border-border/50"
                     style={{ top: i * PIXELS_PER_HOUR }}
+                  />
+                ))}
+                {/* Franjas bloqueadas por el filtro */}
+                {(bloqueos.get(d.key) ?? []).map((b) => (
+                  <FranjaBloqueadaBloque
+                    key={`${b.inicio}-${b.fin}`}
+                    bloqueo={b}
+                    compacto={compacto}
+                    top={(b.inicio - horaMin) * PIXELS_PER_HOUR}
+                    height={(b.fin - b.inicio) * PIXELS_PER_HOUR}
                   />
                 ))}
                 {/* Bloques de cursos */}
