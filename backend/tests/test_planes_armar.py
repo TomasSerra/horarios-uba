@@ -19,7 +19,12 @@ from api.planes import (
     armar_planes,
 )
 
-from .conftest import make_comision_row, make_obliga_row, setup_planes_db
+from .conftest import (
+    make_comision_row,
+    make_obliga_row,
+    make_parte_row,
+    setup_planes_db,
+)
 
 
 # ----------------------------- Helpers locales --------------------------------
@@ -53,6 +58,152 @@ class TestVigencia:
         )
         normalizado = " ".join(sql_opciones.split())
         assert "JOIN catedras ca ON ca.materia_codigo = m.codigo AND ca.vigente" in normalizado
+
+
+class TestComisionesPartidas:
+    """Una comisión publicada en varias filas: sus encuentros van todos juntos.
+
+    Al inscribirte te inscribís a todos, así que el generador tiene que verlos
+    como parte de la misma opción — no como alternativas entre sí.
+    """
+
+    def _materia_partida(self, fake_conn, **parte_kwargs):
+        """Materia 1: comisión los lunes 10-12 + una parte, según parte_kwargs."""
+        setup_planes_db(
+            fake_conn,
+            [
+                make_comision_row(comision_id=100, materia_codigo=1, materia_nombre="M1",
+                                  catedra_id=10, comision_codigo="1", profesor="Prof A",
+                                  dia="lunes", hora_inicio=time(10, 0), hora_fin=time(12, 0),
+                                  vacantes=16),
+            ],
+            parte_rows=[
+                make_parte_row(parte_de_id=100, parte_id=500, codigo="1",
+                               catedra_id=10, **parte_kwargs),
+            ],
+        )
+        return fake_conn
+
+    def test_query_de_comisiones_excluye_las_partes(self, fake_conn):
+        # El filtrado ocurre en SQL y FakeConn no lo ejecuta: acá se verifica que
+        # el predicado siga en el query (mismo enfoque que TestVigencia).
+        self._materia_partida(fake_conn, dia="martes",
+                              hora_inicio=time(11, 0), hora_fin=time(12, 30))
+        armar_planes(fake_conn, _req([MateriaSeleccionada(codigo=1)]))
+
+        sql = next(s for s, _ in fake_conn.executed if "FROM materias m" in s)
+        assert "com.parte_de_id IS NULL" in " ".join(sql.split())
+
+    def test_la_opcion_incluye_las_partes(self, fake_conn):
+        self._materia_partida(fake_conn, dia="martes",
+                              hora_inicio=time(11, 0), hora_fin=time(12, 30))
+        resp = armar_planes(fake_conn, _req([MateriaSeleccionada(codigo=1)]))
+
+        cursos = resp.planes[0].opciones[0].cursos
+        assert [c.id for c in cursos] == [100, 500]
+        # La principal queda primera: _opcion_key y solo_con_cupos leen cursos[0].
+        assert cursos[0].id == 100
+
+    def test_la_parte_no_genera_una_opcion_aparte(self, fake_conn):
+        # Si la parte se contara como comisión suelta habría 2 planes, no 1.
+        self._materia_partida(fake_conn, dia="martes",
+                              hora_inicio=time(11, 0), hora_fin=time(12, 30))
+        resp = armar_planes(fake_conn, _req([MateriaSeleccionada(codigo=1)]))
+
+        assert len(resp.planes) == 1
+
+    def test_solapamiento_contra_la_parte_descarta_el_plan(self, fake_conn):
+        # M1 parte el martes 11-12:30; M2 el martes 11-13 → incompatibles, aunque
+        # las filas principales de ambas no se pisen.
+        setup_planes_db(
+            fake_conn,
+            [
+                make_comision_row(comision_id=100, materia_codigo=1, materia_nombre="M1",
+                                  catedra_id=10, dia="lunes",
+                                  hora_inicio=time(10, 0), hora_fin=time(12, 0)),
+                make_comision_row(comision_id=200, materia_codigo=2, materia_nombre="M2",
+                                  catedra_id=20, dia="martes",
+                                  hora_inicio=time(11, 0), hora_fin=time(13, 0)),
+            ],
+            parte_rows=[
+                make_parte_row(parte_de_id=100, parte_id=500, catedra_id=10,
+                               dia="martes", hora_inicio=time(11, 0), hora_fin=time(12, 30)),
+            ],
+        )
+        resp = armar_planes(
+            fake_conn,
+            _req([MateriaSeleccionada(codigo=1), MateriaSeleccionada(codigo=2)]),
+        )
+
+        assert resp.planes == []
+
+    def test_dia_excluido_de_la_parte_descarta_la_comision(self, fake_conn):
+        self._materia_partida(fake_conn, dia="sabado",
+                              hora_inicio=time(9, 0), hora_fin=time(11, 0))
+        resp = armar_planes(
+            fake_conn,
+            _req([MateriaSeleccionada(codigo=1)], dias_excluidos=["sabado"]),
+        )
+
+        assert resp.materias_sin_opciones == [1]
+
+    def test_solo_con_cupos_lee_las_vacantes_de_la_principal(self, fake_conn):
+        # La parte viene con vacantes NULL (el cupo es uno solo, el de la principal):
+        # mirarla a ella dejaría la comisión afuera.
+        self._materia_partida(fake_conn, dia="martes",
+                              hora_inicio=time(11, 0), hora_fin=time(12, 30))
+        resp = armar_planes(
+            fake_conn, _req([MateriaSeleccionada(codigo=1)], solo_con_cupos=True)
+        )
+
+        assert len(resp.planes) == 1
+
+    def test_filtro_de_profesor_matchea_al_de_la_parte(self, fake_conn):
+        # Decisión de producto: si el profesor elegido dicta cualquiera de los
+        # encuentros, la comisión califica — cursás con esa persona sí o sí.
+        self._materia_partida(fake_conn, dia="martes", profesor="Prof B",
+                              hora_inicio=time(11, 0), hora_fin=time(12, 30))
+        resp = armar_planes(
+            fake_conn,
+            _req([MateriaSeleccionada(codigo=1, profesores=["Prof B"])]),
+        )
+
+        assert len(resp.planes) == 1
+
+    def test_sede_prohibida_en_la_parte_descarta_la_comision(self, fake_conn):
+        self._materia_partida(fake_conn, dia="martes", sede="SI",
+                              hora_inicio=time(11, 0), hora_fin=time(12, 30))
+        resp = armar_planes(
+            fake_conn,
+            _req([MateriaSeleccionada(codigo=1)], sedes_permitidas=["HY"]),
+        )
+
+        assert resp.materias_sin_opciones == [1]
+
+    def test_partes_de_un_obligado_tambien_entran(self, fake_conn):
+        # El modelo no depende del tipo: si la fuente parte un teórico, sus
+        # encuentros tienen que viajar con la comisión que lo obliga.
+        setup_planes_db(
+            fake_conn,
+            [
+                make_comision_row(comision_id=100, materia_codigo=1, materia_nombre="M1",
+                                  catedra_id=10, dia="lunes",
+                                  hora_inicio=time(10, 0), hora_fin=time(12, 0)),
+            ],
+            obliga_rows=[
+                make_obliga_row(comision_id=100, obliga_id=300, tipo="teorico",
+                                catedra_id=10, dia="martes",
+                                hora_inicio=time(14, 0), hora_fin=time(16, 0)),
+            ],
+            parte_rows=[
+                make_parte_row(parte_de_id=300, parte_id=600, tipo="teorico", codigo="T1",
+                               catedra_id=10, dia="jueves",
+                               hora_inicio=time(14, 0), hora_fin=time(16, 0)),
+            ],
+        )
+        resp = armar_planes(fake_conn, _req([MateriaSeleccionada(codigo=1)]))
+
+        assert [c.id for c in resp.planes[0].opciones[0].cursos] == [100, 300, 600]
 
 
 class TestBase:

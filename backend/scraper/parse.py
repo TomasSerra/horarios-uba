@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import time
 
 from bs4 import BeautifulSoup, Tag
@@ -37,6 +37,9 @@ class Curso:
     aula: str | None
     sede: str | None
     observaciones: str | None
+    # Encuentros adicionales de este mismo curso: filas que la fuente publica sin
+    # código, debajo de la principal. No se elige entre ellos, van todos juntos.
+    partes: list["Curso"] = field(default_factory=list)
 
 
 @dataclass
@@ -97,6 +100,9 @@ def _extract_header_text(soup: BeautifulSoup) -> str | None:
 
 
 def _parse_rows(table: Tag, tipo: str) -> list[Curso]:
+    """Devuelve los cursos de la tabla. Una fila sin código no es un curso nuevo
+    sino otro encuentro del anterior: la fuente parte así las comisiones que se
+    cursan más de una vez por semana (ver `Curso.partes`)."""
     rows = table.find_all("tr")
     if not rows:
         return []
@@ -106,24 +112,27 @@ def _parse_rows(table: Tag, tipo: str) -> list[Curso]:
         if len(cells) < 10:
             continue
         codigo = _cell_text(cells[0])
-        if not codigo:
+        if not codigo and not out:
+            # Continuación sin principal: no hay a qué colgarla.
             continue
         aula = _cell_text(cells[8]) or None
-        out.append(
-            Curso(
-                tipo=tipo,
-                codigo=codigo,
-                dia=_cell_text(cells[1]) or None,
-                hora_inicio=_parse_time(_cell_text(cells[2])),
-                hora_fin=_parse_time(_cell_text(cells[3])),
-                profesor=_cell_text(cells[5]) or None,
-                vacantes=_parse_int(_cell_text(cells[6])),
-                obligatorio=_cell_text(cells[7]) or None,
-                aula=aula,
-                sede=_sede_from_aula(aula),
-                observaciones=_normalize_obs(_cell_text(cells[9])),
-            )
+        curso = Curso(
+            tipo=tipo,
+            codigo=codigo or out[-1].codigo,
+            dia=_cell_text(cells[1]) or None,
+            hora_inicio=_parse_time(_cell_text(cells[2])),
+            hora_fin=_parse_time(_cell_text(cells[3])),
+            profesor=_cell_text(cells[5]) or None,
+            vacantes=_parse_int(_cell_text(cells[6])),
+            obligatorio=_cell_text(cells[7]) or None,
+            aula=aula,
+            sede=_sede_from_aula(aula),
+            observaciones=_normalize_obs(_cell_text(cells[9])),
         )
+        if codigo:
+            out.append(curso)
+        else:
+            out[-1].partes.append(curso)
     return out
 
 

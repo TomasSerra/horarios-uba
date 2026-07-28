@@ -80,6 +80,7 @@ class FakeConn:
         self._rules = []  # list of dicts
         self.executed = []  # [(sql, params)]
         self.commits = 0
+        self.returning_ids = None  # ids que devuelve executemany(returning=True)
 
     def on(self, sql_substring, *, rows=None, rowcount=None, consume=False, side_effect=None):
         self._rules.append({
@@ -119,11 +120,18 @@ class FakeConn:
 
 
 class _FakeCursorCtx:
-    """`with conn.cursor() as cur: cur.executemany(...)` — lo usa replace_cursos."""
+    """`with conn.cursor() as cur: cur.executemany(...)` — lo usa replace_cursos.
+
+    Con `returning=True` simula el RETURNING id: un result set por fila insertada,
+    recorridos con fetchone()/nextset(). Los ids salen de `conn.returning_ids`
+    (default: 1..N) para que el test pueda fijarlos.
+    """
 
     def __init__(self, conn):
         self._conn = conn
         self.executemany_calls = []
+        self._returned = []
+        self._pos = 0
 
     def __enter__(self):
         return self
@@ -131,9 +139,21 @@ class _FakeCursorCtx:
     def __exit__(self, *a):
         return False
 
-    def executemany(self, sql, rows):
-        self.executemany_calls.append((sql, list(rows)))
-        self._conn.executed.append((sql, list(rows)))
+    def executemany(self, sql, rows, returning=False):
+        rows = list(rows)
+        self.executemany_calls.append((sql, rows))
+        self._conn.executed.append((sql, rows))
+        if returning:
+            ids = self._conn.returning_ids or list(range(1, len(rows) + 1))
+            self._returned = [(i,) for i in ids[: len(rows)]]
+            self._pos = 0
+
+    def fetchone(self):
+        return self._returned[self._pos] if self._pos < len(self._returned) else None
+
+    def nextset(self):
+        self._pos += 1
+        return self._pos < len(self._returned)
 
     def execute(self, sql, params=None):
         return self._conn.execute(sql, params)
@@ -238,14 +258,53 @@ def make_obliga_row(
     }
 
 
-def setup_planes_db(fake_conn, comision_rows, obliga_rows=None, congeladas=()):
+def make_parte_row(
+    *,
+    parte_de_id,
+    parte_id,
+    tipo="comision",
+    codigo="01",
+    catedra_id=1,
+    dia="miercoles",
+    hora_inicio=time(10, 0),
+    hora_fin=time(12, 0),
+    aula="HY103",
+    profesor="Prof Y",
+    sede="HY",
+    vacantes=None,
+):
+    """Fila como la devuelve _fetch_opciones_por_materia (query de partes).
+
+    `vacantes=None` por default: en la fuente el cupo lo trae sólo la fila principal.
+    """
+    return {
+        "parte_de_id": parte_de_id,
+        "id": parte_id,
+        "tipo": tipo,
+        "codigo": codigo,
+        "dia": dia,
+        "hora_inicio": hora_inicio,
+        "hora_fin": hora_fin,
+        "aula": aula,
+        "profesor": profesor,
+        "sede": sede,
+        "catedra_id": catedra_id,
+        "vacantes": vacantes,
+    }
+
+
+def setup_planes_db(
+    fake_conn, comision_rows, obliga_rows=None, parte_rows=None, congeladas=()
+):
     """Registra las queries que ejecuta armar_planes:
     1) FROM materias m JOIN catedras ca JOIN cursos com ...
     2) FROM comision_obliga co JOIN cursos t ...
-    3) materias con la oferta congelada (sólo si el request trae solo_con_cupos).
+    3) FROM cursos p WHERE p.parte_de_id = ANY(...) — encuentros extra.
+    4) materias con la oferta congelada (sólo si el request trae solo_con_cupos).
     """
     fake_conn.on("from materias m", rows=comision_rows)
     fake_conn.on("from comision_obliga co", rows=obliga_rows or [])
+    fake_conn.on("where p.parte_de_id", rows=parte_rows or [])
     fake_conn.on(
         "where oferta_congelada", rows=[{"codigo": c} for c in congeladas]
     )

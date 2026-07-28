@@ -67,6 +67,12 @@ BEGIN
     END IF;
 END$$;
 
+-- `parte_de_id` modela las comisiones que la fuente publica en varias filas: la
+-- primera trae el número, las vacantes y el `obligatorio`; las siguientes vienen
+-- con la celda de código vacía y son encuentros adicionales de esa MISMA comisión
+-- (a veces otro profesor, aula o día). Al anotarte te anotás a todos y el cupo es
+-- uno solo. Las partes se guardan como filas de cursos con el mismo `codigo` que
+-- su principal y `parte_de_id` apuntando a ella; NULL = es la fila principal.
 CREATE TABLE IF NOT EXISTS cursos (
     id              BIGSERIAL PRIMARY KEY,
     catedra_id      INTEGER NOT NULL REFERENCES catedras(id) ON DELETE CASCADE,
@@ -80,13 +86,22 @@ CREATE TABLE IF NOT EXISTS cursos (
     obligatorio     TEXT,
     aula            TEXT,
     sede            TEXT,
-    observaciones   TEXT
+    observaciones   TEXT,
+    parte_de_id     BIGINT REFERENCES cursos(id) ON DELETE CASCADE
     -- (catedra_id, tipo, codigo) NO es único: la fuente puede listar dos
-    -- teóricos "I" con co-titulares en bloques consecutivos.
+    -- teóricos "I" con co-titulares en bloques consecutivos. Y ahora tampoco lo
+    -- es por las partes, que comparten el código de su principal.
 );
+
+-- Para DBs preexistentes (Neon). NULL en toda fila existente = todas principales,
+-- así que agregar la columna no cambia nada hasta que el scraper corra.
+ALTER TABLE cursos ADD COLUMN IF NOT EXISTS parte_de_id BIGINT
+    REFERENCES cursos(id) ON DELETE CASCADE;
 
 CREATE INDEX IF NOT EXISTS idx_cursos_dia       ON cursos(dia);
 CREATE INDEX IF NOT EXISTS idx_cursos_catedra   ON cursos(catedra_id);
+CREATE INDEX IF NOT EXISTS idx_cursos_parte_de  ON cursos(parte_de_id)
+    WHERE parte_de_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_catedras_materia ON catedras(materia_codigo);
 -- Índice parcial para las lecturas del armado de planes, que siempre filtran por
 -- vigencia. El índice completo de arriba sigue sirviendo a las queries de reseñas,

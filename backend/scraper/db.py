@@ -8,6 +8,15 @@ import psycopg
 from .config import DATABASE_URL
 from .parse import CatedraDetalle
 
+INSERT_CURSO = """
+    INSERT INTO cursos (
+        catedra_id, tipo, codigo, dia, hora_inicio, hora_fin,
+        profesor, vacantes, obligatorio, aula, sede, observaciones, parte_de_id
+    )
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    RETURNING id
+"""
+
 
 @contextmanager
 def get_conn():
@@ -93,8 +102,9 @@ def replace_cursos(conn: psycopg.Connection, detalle: CatedraDetalle) -> None:
     conn.execute("DELETE FROM cursos WHERE catedra_id = %s", (detalle.catedra_id,))
     if not detalle.cursos:
         return
-    rows = [
-        (
+
+    def _row(c, parte_de_id=None):
+        return (
             detalle.catedra_id,
             c.tipo,
             c.codigo,
@@ -107,20 +117,26 @@ def replace_cursos(conn: psycopg.Connection, detalle: CatedraDetalle) -> None:
             c.aula,
             c.sede,
             c.observaciones,
+            parte_de_id,
         )
-        for c in detalle.cursos
-    ]
+
     with conn.cursor() as cur:
-        cur.executemany(
-            """
-            INSERT INTO cursos (
-                catedra_id, tipo, codigo, dia, hora_inicio, hora_fin,
-                profesor, vacantes, obligatorio, aula, sede, observaciones
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            rows,
-        )
+        # Dos pasadas: las partes necesitan el id de su principal, así que la
+        # primera vuelve con RETURNING (un result set por fila, en orden de entrada).
+        cur.executemany(INSERT_CURSO, [_row(c) for c in detalle.cursos], returning=True)
+        ids = []
+        while True:
+            ids.append(cur.fetchone()[0])
+            if not cur.nextset():
+                break
+
+        partes = [
+            _row(p, parte_de_id=cid)
+            for cid, c in zip(ids, detalle.cursos)
+            for p in c.partes
+        ]
+        if partes:
+            cur.executemany(INSERT_CURSO, partes)
 
 
 def resolve_obligatorio(conn: psycopg.Connection, catedra_id: int) -> None:
@@ -131,6 +147,11 @@ def resolve_obligatorio(conn: psycopg.Connection, catedra_id: int) -> None:
 
     Idempotente: las filas previas se borran vía CASCADE cuando replace_cursos
     elimina los cursos.
+
+    Sólo participan filas principales (`parte_de_id IS NULL`). Del lado de la
+    comisión porque las partes repiten el `obligatorio` del padre y duplicarían el
+    teórico dentro de la opción, dejando todo plan auto-solapado. Del lado del
+    teórico porque una parte comparte el código de su principal y matchearía dos veces.
     """
     conn.execute(
         r"""
@@ -140,6 +161,7 @@ def resolve_obligatorio(conn: psycopg.Connection, catedra_id: int) -> None:
           JOIN cursos t ON t.catedra_id = cu.catedra_id
                          AND t.id <> cu.id
                          AND t.tipo IN ('teorico', 'seminario')
+                         AND t.parte_de_id IS NULL
                          AND UPPER(REPLACE(REPLACE(t.codigo, 'l', 'I'), 'Ï', 'I')) = ANY(
                                SELECT UPPER(REPLACE(REPLACE(TRIM(token), 'l', 'I'), 'Ï', 'I'))
                                  FROM regexp_split_to_table(cu.obligatorio, '\s*-\s*') AS token
@@ -147,6 +169,7 @@ def resolve_obligatorio(conn: psycopg.Connection, catedra_id: int) -> None:
                              )
          WHERE cu.catedra_id = %s
            AND cu.tipo = 'comision'
+           AND cu.parte_de_id IS NULL
            AND cu.obligatorio IS NOT NULL
         ON CONFLICT DO NOTHING
         """,

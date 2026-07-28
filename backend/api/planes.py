@@ -381,11 +381,15 @@ def _hay_solapamiento(cursos: Iterable[CursoEnPlan]) -> bool:
 
 def _fetch_opciones_por_materia(conn, materia_codigos: list[int]) -> dict[int, list[OpcionMateria]]:
     """Para cada materia, devuelve todas sus opciones de cursada
-    (una por comisión, con sus obligaciones expandidas).
+    (una por comisión, con sus obligaciones y sus partes expandidas).
 
     Sólo cátedras vigentes: los cursos de una cátedra que dejó de dictarse siguen
     en la DB (los necesitan las reseñas) pero no deben generar planes. Sin este
-    filtro se arman planes con los horarios del cuatrimestre anterior."""
+    filtro se arman planes con los horarios del cuatrimestre anterior.
+
+    Sólo filas principales (`parte_de_id IS NULL`) como comisión: una parte no es
+    una opción alternativa sino otro encuentro obligatorio de la misma comisión,
+    y se suma abajo a los cursos de la opción."""
     rows = conn.execute(
         """
         SELECT m.codigo AS materia_codigo, m.nombre AS materia_nombre,
@@ -397,6 +401,7 @@ def _fetch_opciones_por_materia(conn, materia_codigos: list[int]) -> dict[int, l
           FROM materias m
           JOIN catedras ca ON ca.materia_codigo = m.codigo AND ca.vigente
           JOIN cursos com ON com.catedra_id = ca.id AND com.tipo = 'comision'
+                         AND com.parte_de_id IS NULL
          WHERE m.codigo = ANY(%s)
          ORDER BY m.codigo, ca.id, LENGTH(com.codigo), com.codigo
         """,
@@ -426,6 +431,28 @@ def _fetch_opciones_por_materia(conn, materia_codigos: list[int]) -> dict[int, l
         cid = r.pop("comision_id")
         obliga_map[cid].append(CursoEnPlan(**r))
 
+    # Encuentros extra de las comisiones y de sus obligados. Van sí o sí con el
+    # curso al que pertenecen: inscribirse en la comisión te inscribe en todos.
+    partes_rows = conn.execute(
+        """
+        SELECT p.parte_de_id,
+               p.id, p.tipo::text AS tipo, p.codigo, p.dia,
+               p.hora_inicio, p.hora_fin, p.aula, p.profesor, p.sede,
+               p.catedra_id, p.vacantes
+          FROM cursos p
+         WHERE p.parte_de_id = ANY(%s)
+         ORDER BY p.id
+        """,
+        (comision_ids + [r["id"] for r in obliga_rows],),
+    ).fetchall()
+
+    partes_map: dict[int, list[CursoEnPlan]] = defaultdict(list)
+    for r in partes_rows:
+        partes_map[r.pop("parte_de_id")].append(CursoEnPlan(**r))
+
+    def _con_partes(curso: CursoEnPlan) -> list[CursoEnPlan]:
+        return [curso, *partes_map.get(curso.id, [])]
+
     opciones_por_materia: dict[int, list[OpcionMateria]] = {cod: [] for cod in materia_codigos}
     for r in rows:
         comision = CursoEnPlan(
@@ -441,7 +468,16 @@ def _fetch_opciones_por_materia(conn, materia_codigos: list[int]) -> dict[int, l
             catedra_id=r["catedra_id"],
             vacantes=r["vacantes"],
         )
-        cursos = [comision, *obliga_map.get(r["comision_id"], [])]
+        # La comisión principal queda primera: `_opcion_key` y `solo_con_cupos`
+        # leen cursos[0] (es la única fila que trae las vacantes).
+        cursos = [
+            *_con_partes(comision),
+            *(
+                c
+                for obliga in obliga_map.get(r["comision_id"], [])
+                for c in _con_partes(obliga)
+            ),
+        ]
         opciones_por_materia[r["materia_codigo"]].append(
             OpcionMateria(
                 materia_codigo=r["materia_codigo"],

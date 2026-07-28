@@ -126,7 +126,7 @@ const MATERIAS_TTL_MS = 60 * 60 * 1000;
 // **scraper primero, bump + deploy del FE después**. Al revés queda cacheado el
 // snapshot previo al sweep: trae el campo de vigencia (así que `fetchFresco` lo
 // da por bueno) pero con todas las cátedras todavía vigentes.
-export const DATA_VERSION = 6;
+export const DATA_VERSION = 7;
 
 function withVersion(path: string): string {
   return `${path}${path.includes("?") ? "&" : "?"}v=${DATA_VERSION}`;

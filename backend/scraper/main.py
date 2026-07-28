@@ -22,6 +22,18 @@ from .parse import parse_catedra_page
 from .vigencia import evaluar_sweep
 
 
+def _resumen(detalle) -> str:
+    """Conteo por tipo para el log. Las partes se cuentan aparte: es la señal con
+    la que se verifica que las comisiones partidas entraron en una corrida."""
+    counts = Counter(c.tipo for c in detalle.cursos)
+    partes = sum(len(c.partes) for c in detalle.cursos)
+    return (
+        f"(T:{counts.get('teorico', 0)} S:{counts.get('seminario', 0)} "
+        f"C:{counts.get('comision', 0)}"
+        + (f" +{partes} partes)" if partes else ")")
+    )
+
+
 def scrape_catedra(catedra_id: int) -> None:
     html = fetch(CATEDRA_URL, params={"catedra": catedra_id})
     detalle = parse_catedra_page(html)
@@ -32,12 +44,7 @@ def scrape_catedra(catedra_id: int) -> None:
     # save_detalle deja la columna sin tocar si la fila ya existe.
     with get_conn() as conn:
         save_detalle(conn, detalle)
-    counts = Counter(c.tipo for c in detalle.cursos)
-    print(
-        f"  catedra={catedra_id}: {detalle.materia_nombre} "
-        f"(T:{counts.get('teorico', 0)} S:{counts.get('seminario', 0)} "
-        f"C:{counts.get('comision', 0)})"
-    )
+    print(f"  catedra={catedra_id}: {detalle.materia_nombre} {_resumen(detalle)}")
 
 
 def scrape_many(entries: list[IndexEntry], delay: float) -> int:
@@ -54,11 +61,9 @@ def scrape_many(entries: list[IndexEntry], delay: float) -> int:
                 continue
             with get_conn() as conn:
                 save_detalle(conn, detalle, carrera=entry.carrera_slug)
-            counts = Counter(c.tipo for c in detalle.cursos)
             print(
                 f"{prefix} catedra={entry.catedra_id}: {detalle.materia_nombre} "
-                f"(T:{counts.get('teorico', 0)} S:{counts.get('seminario', 0)} "
-                f"C:{counts.get('comision', 0)})"
+                f"{_resumen(detalle)}"
             )
         except Exception as exc:
             print(f"{prefix} catedra={entry.catedra_id}: ERROR {exc!r}")

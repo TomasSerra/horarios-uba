@@ -30,6 +30,9 @@ class CursoResponse(BaseModel):
     aula: str | None = None
     sede: str | None = None
     observaciones: str | None = None
+    # Si no es None, esta fila es otro encuentro del curso con ese id (misma
+    # comisión publicada en varias filas), no un curso que se pueda elegir aparte.
+    parte_de_id: int | None = None
     # None para cursos no-comisión; lista (posiblemente vacía) para comisiones.
     # En /cursos solo se popula cuando se pide ?incluir=obliga.
     obliga_a: list[CursoSummary] | None = None

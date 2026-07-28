@@ -454,10 +454,10 @@ def get_catedra(catedra_id: int, response: Response) -> CatedraDetail:
             """
             SELECT id, catedra_id, tipo::text, codigo, dia,
                    hora_inicio, hora_fin, profesor, vacantes,
-                   obligatorio, aula, sede, observaciones
+                   obligatorio, aula, sede, observaciones, parte_de_id
               FROM cursos
              WHERE catedra_id = %s
-             ORDER BY tipo, LENGTH(codigo), codigo
+             ORDER BY tipo, LENGTH(codigo), codigo, parte_de_id NULLS FIRST, id
             """,
             (catedra_id,),
         ).fetchall()
@@ -493,7 +493,7 @@ def search_cursos(
     sql = """
         SELECT cu.id, cu.catedra_id, cu.tipo::text, cu.codigo, cu.dia,
                cu.hora_inicio, cu.hora_fin, cu.profesor, cu.vacantes,
-               cu.obligatorio, cu.aula, cu.sede, cu.observaciones,
+               cu.obligatorio, cu.aula, cu.sede, cu.observaciones, cu.parte_de_id,
                ca.materia_codigo, m.nombre AS materia_nombre
           FROM cursos cu
           JOIN catedras ca ON ca.id = cu.catedra_id
@@ -504,7 +504,8 @@ def search_cursos(
            AND (%(dia)s::text IS NULL OR cu.dia = %(dia)s)
            AND (%(sede)s::text IS NULL OR cu.sede = %(sede)s)
            AND (%(profesor_pattern)s::text IS NULL OR cu.profesor ILIKE %(profesor_pattern)s)
-         ORDER BY cu.catedra_id, cu.tipo, LENGTH(cu.codigo), cu.codigo
+         ORDER BY cu.catedra_id, cu.tipo, LENGTH(cu.codigo), cu.codigo,
+                  cu.parte_de_id NULLS FIRST, cu.id
          LIMIT %(limit)s OFFSET %(offset)s
     """
     params = {

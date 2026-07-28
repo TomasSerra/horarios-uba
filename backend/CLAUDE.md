@@ -142,9 +142,31 @@ Hay materias que se cursan todo el año (`materias.anual`) pero que la fuente s�
 
 Lo consume `solo_con_cupos` en [api/planes.py](api/planes.py): sobre una materia congelada el filtro no aplica, porque sus `vacantes` son del cuatrimestre pasado y dejarían afuera a quien ya la está cursando. En el 1er cuatrimestre la misma materia filtra normal. `_materias_con_oferta_congelada` sólo se consulta cuando el request trae `solo_con_cupos`.
 
+## Comisiones partidas
+
+La fuente publica algunas comisiones en **más de una fila**: la primera trae el número, las vacantes y el `Oblig.`; las siguientes vienen con la celda de código **vacía** y son encuentros adicionales de esa misma comisión — a veces con otro profesor, otra aula u otro día. **Al inscribirte te inscribís a todos**, y el cupo es uno solo. No son alternativas entre sí: son la misma opción de cursada.
+
+No es marginal: al escribir esto, **413 de 2050 comisiones (20%)** en 18 cátedras están partidas, con hasta 5 filas. Son casi todas Prácticas Profesionales (I–IV) y P.P. de área, donde la comisión ocupa la semana entera. Antes de modelarlas, el scraper las descartaba y la app mostraba esas cursadas incompletas: el generador no veía los horarios reales y armaba planes con solapamientos.
+
+**Modelo**: cada parte es una fila más en `cursos`, con el mismo `tipo` y el mismo `codigo` que su principal, y `parte_de_id` apuntando a ella. `parte_de_id IS NULL` = fila principal. Se eligió esta forma (y no una tabla aparte) porque mantiene los ids únicos en `cursos` — el calendario y las reseñas siguen funcionando sin tocar nada — y porque al compartir el `codigo` las partes entran solas en `/materias/{cod}/opciones`, que es lo que hace que sus profesores sean elegibles y reseñables.
+
+Invariantes que sostiene la fuente (verificados sobre las 413): ninguna parte trae vacantes propias, el `Oblig.` es idéntico en todas las partes de una comisión, y ninguna comisión solapa consigo misma.
+
+| Dónde | Qué hace |
+| --- | --- |
+| `_parse_rows` ([scraper/parse.py](scraper/parse.py)) | Fila sin código → `Curso` colgado de `partes` del anterior, heredando su `codigo`. Sin principal previa se descarta. |
+| `replace_cursos` ([scraper/db.py](scraper/db.py)) | Dos pasadas: principales con `RETURNING id`, después las partes con `parte_de_id` resuelto. |
+| `resolve_obligatorio` ([scraper/db.py](scraper/db.py)) | `parte_de_id IS NULL` de los **dos** lados del join. Sin la guarda del lado de la comisión, la parte repite el `obligatorio` del padre y el teórico entra dos veces en la opción: **todo plan queda solapado contra sí mismo**. |
+| `_fetch_opciones_por_materia` ([api/planes.py](api/planes.py)) | Sólo principales como comisión (si no, cada parte sería una opción duplicada) + una 3ra query que trae las partes de la comisión **y de sus obligados**, y las suma a `op.cursos`. |
+| `/materias/{cod}/opciones` ([api/main.py](api/main.py)) | Sin filtro a propósito: las partes aportan sus profesores y sedes al dropdown. `MateriaCard` ya agrupa por `codigo`. |
+
+Como las partes quedan dentro de `op.cursos`, **todos los filtros existentes las contemplan solas**: solapamiento, días, franjas, sede, bache y días/horas. El filtro de profesor usa `any(c.tipo == "comision" and ...)`, así que una comisión califica si el profesor elegido dicta **cualquiera** de sus encuentros — que es la lectura correcta: cursás con esa persona sí o sí. `cursos[0]` sigue siendo la comisión principal, que es lo que asumen `_opcion_key` y `solo_con_cupos` (la única fila con vacantes).
+
+El modelo no depende del tipo: si mañana la fuente parte un teórico, ya está cubierto (hoy no pasa). El log del scraper imprime `+N partes` por cátedra — es la señal para verificar que una corrida las levantó.
+
 ## Generador de planes ([api/planes.py](api/planes.py))
 
-1. Por materia, traer todas las opciones (`comision + obligas`).
+1. Por materia, traer todas las opciones (`comision + obligas` + las partes de ambos, ver [Comisiones partidas](#comisiones-partidas)).
 2. Filtrar por `catedra_id` si vino, por `comision_codigo` dentro de esa cátedra (requiere `catedra_id`: los códigos de comisión se repiten entre cátedras), por profesores permitidos (semántica: `None` = todos, `[]` = ninguno → 0 opciones, lista = subset), y por restricciones de día/franja/sede.
 3. Si alguna materia queda sin opciones válidas → response con `materias_sin_opciones`.
 4. `itertools.product(*opciones_validas)` y para cada combo chequear solapamientos. Cortar al alcanzar `max_planes`.
