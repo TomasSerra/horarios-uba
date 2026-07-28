@@ -77,7 +77,7 @@ API en **Vercel** (Free) como FastAPI serverless ([docs](https://vercel.com/docs
 | GET | `/carreras` | — | Lista de carreras con sus sedes. |
 | GET | `/materias?q=&carrera=` | — | Lista de materias con filtro substring, opcionalmente acotada a una carrera. Devuelve `cant_catedras` (histórico), `cant_catedras_vigentes` y `anual`. |
 | GET | `/materias/{codigo}` | — | Materia + cátedras. |
-| GET | `/materias/{codigo}/opciones` | — | Materia + cátedras + profesores únicos + `comisiones` (con `codigo`, para el filtro de Nro de comisión). Incluye cátedras no vigentes con `vigente=false`: lo consumen `MateriaCard.tsx` (filtra) y `ReviewDialog.tsx` (no filtra). |
+| GET | `/materias/{codigo}/opciones` | — | Materia + cátedras + profesores únicos + `comisiones` (con `codigo`, para el filtro de Nro de comisión). Incluye cátedras no vigentes con `vigente=false`: lo consumen `MateriaCard.tsx` (filtra) y `ReviewDialog.tsx` (no filtra). Trae también `obliga_teorico` / `obliga_seminario` por cátedra (ver [Teórico y seminario libres](#teórico-y-seminario-libres)). |
 | GET | `/catedras/{id}` | — | Cátedra + todos sus cursos con `obliga_a` resuelto. |
 | GET | `/cursos?...&incluir_obliga=` | — | Búsqueda flexible. |
 | POST | `/planes` | `optional_user` | Si el usuario es Pro, aplica filtros completos y cap 100. Si no, anula filtros y capea a 15. |
@@ -160,13 +160,13 @@ Invariantes que sostiene la fuente (verificados sobre las 413): ninguna parte tr
 | `_fetch_opciones_por_materia` ([api/planes.py](api/planes.py)) | Sólo principales como comisión (si no, cada parte sería una opción duplicada) + una 3ra query que trae las partes de la comisión **y de sus obligados**, y las suma a `op.cursos`. |
 | `/materias/{cod}/opciones` ([api/main.py](api/main.py)) | Sin filtro a propósito: las partes aportan sus profesores y sedes al dropdown. `MateriaCard` ya agrupa por `codigo`. |
 
-Como las partes quedan dentro de `op.cursos`, **todos los filtros existentes las contemplan solas**: solapamiento, días, franjas, sede, bache y días/horas. El filtro de profesor usa `any(c.tipo == "comision" and ...)`, así que una comisión califica si el profesor elegido dicta **cualquiera** de sus encuentros — que es la lectura correcta: cursás con esa persona sí o sí. `cursos[0]` sigue siendo la comisión principal, que es lo que asumen `_opcion_key` y `solo_con_cupos` (la única fila con vacantes).
+Como las partes quedan dentro de `op.cursos`, **todos los filtros existentes las contemplan solas**: solapamiento, días, franjas, sede, bache y días/horas. El filtro de profesor usa `any(c.tipo == "comision" and ...)`, así que una comisión califica si el profesor elegido dicta **cualquiera** de sus encuentros — que es la lectura correcta: cursás con esa persona sí o sí. `cursos[0]` sigue siendo la comisión principal, que es lo que asume `solo_con_cupos` (la única fila con vacantes).
 
 El modelo no depende del tipo: si mañana la fuente parte un teórico, ya está cubierto (hoy no pasa). El log del scraper imprime `+N partes` por cátedra — es la señal para verificar que una corrida las levantó.
 
 ## Generador de planes ([api/planes.py](api/planes.py))
 
-1. Por materia, traer todas las opciones (`comision + obligas` + las partes de ambos, ver [Comisiones partidas](#comisiones-partidas)).
+1. Por materia, traer todas las opciones (comisión + teóricos/seminarios que la acompañan + las partes de todos, ver [Comisiones partidas](#comisiones-partidas) y [Teórico y seminario libres](#teórico-y-seminario-libres)).
 2. Filtrar por `catedra_id` si vino, por `comision_codigo` dentro de esa cátedra (requiere `catedra_id`: los códigos de comisión se repiten entre cátedras), por profesores permitidos (semántica: `None` = todos, `[]` = ninguno → 0 opciones, lista = subset), y por restricciones de día/franja/sede.
 3. Si alguna materia queda sin opciones válidas → response con `materias_sin_opciones`.
 4. `itertools.product(*opciones_validas)` y para cada combo chequear solapamientos. Cortar al alcanzar `max_planes`.
@@ -177,6 +177,31 @@ Notas:
 - `total_generados` = combos evaluados hasta el corte (no = combos totales del producto).
 - `_hay_solapamiento` opera sobre la lista plana de cursos del combo.
 - El campo `profesores` en `MateriaSeleccionada` es `list[str] | None` con la semántica triple descrita.
+- `_opcion_key` es la tupla de **todos** los ids de la opción, no sólo el de la comisión: con los flags libres dos opciones distintas comparten comisión. `_reorder_round_robin` precalcula esas claves una vez porque su matching es O(n²) sobre un pool de hasta 1000 planes.
+
+### Teórico y seminario libres
+
+`MateriaSeleccionada.teorico_libre` / `.seminario_libre` (default `False` = atado, el comportamiento de siempre) desatan la comisión del curso que obliga: puede ir con **cualquiera** de su misma cátedra. Son **Pro en todas las materias, anuales incluidas** — la exención de las anuales cubre cátedra y comisión, nada más.
+
+`_variantes_de_tipo` ([api/planes.py](api/planes.py)) resuelve, por comisión y por tipo, qué cursos la acompañan. `catalogo` = cursos principales de ese tipo de la cátedra; `obligados` = los de `comision_obliga`:
+
+| Situación | Variantes |
+| --- | --- |
+| `catalogo` vacío | ninguna (la cátedra no dicta ese tipo) |
+| Sin obligados, **teórico** | una por cada teórico del catálogo — hay que cursar alguno igual, sin importar el flag |
+| Sin obligados, **seminario** | ninguna: un seminario que nadie obliga es optativo |
+| Con obligados, flag apagado | exactamente los obligados |
+| Con obligados, flag prendido | cualquier combinación del **mismo tamaño** (las comisiones que obligan 2 teóricos toman pares) |
+
+La asimetría teórico/seminario sale de los datos: las ~140 comisiones sin teórico obligado son Prácticas Profesionales e Idiomas, y en esas cátedras es el 100% de sus comisiones (no es un fallo del matching difuso); las ~37 sin seminario obligado están en 5 cátedras donde tampoco lo obliga ninguna.
+
+El catálogo se trae **siempre** (una query más en `_fetch_opciones_por_materia`), porque la regla del teórico sin obligación no depende de los flags.
+
+Dos consecuencias de diseño:
+- **Orden**: las opciones de cada materia salen con las "naturales" primero (una por comisión) y las recombinadas después. `_enumerar_combos` explora los índices bajos primero, así que sin esto los primeros planes serían todos la misma comisión con distinto teórico.
+- **Volumen**: con ambos flags Psicopatología pasa de 104 opciones a ~13.200. Por eso las `OpcionMateria` se arman con `model_construct` y los `CursoEnPlan` del catálogo se comparten entre opciones. Medido contra la DB local, el peor caso realista (Psicopatología + Psicoanálisis Freud + Historia, los tres libres) da ~170 ms contra ~60 ms del baseline.
+
+El FE decide si muestra los toggles con `obliga_teorico` / `obliga_seminario` de `/materias/{cod}/opciones`: donde no hay obligación el switch no cambiaría nada.
 
 ## Reglas de modificación
 

@@ -380,7 +380,22 @@ def get_materia_opciones(codigo: int, response: Response) -> MateriaOpciones:
                    (SELECT AVG(r.rating)::float FROM catedra_reviews r
                      WHERE r.catedra_id = ca.id) AS avg_rating,
                    (SELECT COUNT(*) FROM catedra_reviews r
-                     WHERE r.catedra_id = ca.id) AS review_count
+                     WHERE r.catedra_id = ca.id) AS review_count,
+                   -- Si alguna comisión de la cátedra obliga un curso de ese
+                   -- tipo. El FE muestra el toggle de "coincide con su práctico"
+                   -- sólo si hay algo atado que desatar.
+                   EXISTS (SELECT 1
+                             FROM cursos com
+                             JOIN comision_obliga co ON co.comision_id = com.id
+                             JOIN cursos t ON t.id = co.obliga_a_id
+                            WHERE com.catedra_id = ca.id
+                              AND t.tipo = 'teorico') AS obliga_teorico,
+                   EXISTS (SELECT 1
+                             FROM cursos com
+                             JOIN comision_obliga co ON co.comision_id = com.id
+                             JOIN cursos t ON t.id = co.obliga_a_id
+                            WHERE com.catedra_id = ca.id
+                              AND t.tipo = 'seminario') AS obliga_seminario
               FROM catedras ca
               LEFT JOIN cursos cu ON cu.catedra_id = ca.id AND cu.tipo = 'comision'
              WHERE ca.materia_codigo = %s
@@ -424,6 +439,8 @@ def get_materia_opciones(codigo: int, response: Response) -> MateriaOpciones:
                 vigente=r["vigente"],
                 profesores=sorted(r["profesores"]),
                 comisiones=[ComisionOpcion(**c) for c in r["comisiones"]],
+                obliga_teorico=r["obliga_teorico"],
+                obliga_seminario=r["obliga_seminario"],
                 avg_rating=(
                     round(r["avg_rating"], 2) if r["avg_rating"] is not None else None
                 ),
@@ -559,6 +576,9 @@ def _request_uses_filters(req: PlanRequest, anuales: set[int]) -> bool:
     for m in req.materias:
         if m.profesores is not None or m.sede is not None:
             return True
+        # Desatar el teórico/seminario de su comisión es Pro incluso en anuales.
+        if m.teorico_libre or m.seminario_libre:
+            return True
         if m.codigo in anuales:
             continue
         if m.catedra_id is not None or m.comision_codigo is not None:
@@ -599,9 +619,10 @@ def post_planes(
                 status_code=403,
                 detail=(
                     "Los filtros (franjas, sedes, bache máximo, días por "
-                    "semana, horas por día, cátedra y profesores) son una "
-                    "función Pro. Suscribite para usarlos. En materias anuales, "
-                    "cátedra y comisión son libres."
+                    "semana, horas por día, cátedra, profesores y desatar el "
+                    "teórico/seminario de su práctico) son una función Pro. "
+                    "Suscribite para usarlos. En materias anuales, cátedra y "
+                    "comisión son libres."
                 ),
             )
         max_allowed = 100 if is_paid else 15

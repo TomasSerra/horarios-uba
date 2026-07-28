@@ -98,6 +98,11 @@ class CatedraOpcion(BaseModel):
     vigente: bool = True
     profesores: list[str]  # profesores únicos de las comisiones de esta cátedra
     comisiones: list[ComisionOpcion]  # tuplas (profesor, sede) de sus comisiones
+    # Si alguna comisión de la cátedra obliga un teórico / un seminario. El FE
+    # muestra los toggles de "coincide con su práctico" sólo cuando hay obligación:
+    # sin ella el teórico ya es libre y el seminario es optativo.
+    obliga_teorico: bool = False
+    obliga_seminario: bool = False
     # Reseñas de la cátedra (para mostrar estrellas en el selector del planner).
     avg_rating: float | None = None
     review_count: int = 0

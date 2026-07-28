@@ -20,6 +20,7 @@ from api.planes import (
 )
 
 from .conftest import (
+    make_catalogo_row,
     make_comision_row,
     make_obliga_row,
     make_parte_row,
@@ -1244,7 +1245,8 @@ class TestDeterminismo:
         ]
 
     def test_comision_es_siempre_el_primer_curso(self, fake_conn):
-        # Invariante de _opcion_key: cursos[0] es la comisión.
+        # Invariante de solo_con_cupos: cursos[0] es la comisión (la única fila
+        # que trae las vacantes).
         comisiones = [
             make_comision_row(comision_id=100, materia_codigo=1, catedra_id=10, dia="lunes"),
         ]
@@ -1257,3 +1259,357 @@ class TestDeterminismo:
         assert len(resp.planes) == 1
         assert resp.planes[0].opciones[0].cursos[0].tipo == "comision"
         assert resp.planes[0].opciones[0].cursos[0].id == 100
+
+
+# ----------------------------- Teórico/seminario libres -----------------------
+
+class TestTeoricoSeminarioLibres:
+    """`teorico_libre` / `seminario_libre`: desatan la comisión del curso que
+    obliga, dejándola ir con cualquier teórico/seminario de su misma cátedra.
+
+    Además, sin importar los flags: si la comisión no obliga teórico pero la
+    cátedra dicta alguno, hay que cursar uno igual (va cualquiera); un seminario
+    que ninguna comisión obliga es optativo y no entra al plan.
+    """
+
+    def _catedra_con_teoricos(self, fake_conn, *, obligados=(1000,), catalogo=(1000, 1001, 1002)):
+        """Materia 1 / cátedra 10: comisión 100 el lunes 10-12 y teóricos en días
+        distintos (nunca solapan entre sí ni con la comisión)."""
+        dias = {1000: "martes", 1001: "miercoles", 1002: "jueves"}
+        setup_planes_db(
+            fake_conn,
+            [
+                make_comision_row(comision_id=100, materia_codigo=1, materia_nombre="M1",
+                                  catedra_id=10, comision_codigo="1",
+                                  dia="lunes", hora_inicio=time(10, 0), hora_fin=time(12, 0)),
+            ],
+            obliga_rows=[
+                make_obliga_row(comision_id=100, obliga_id=t, catedra_id=10, tipo="teorico",
+                                codigo=f"T{t}", dia=dias[t],
+                                hora_inicio=time(14, 0), hora_fin=time(16, 0))
+                for t in obligados
+            ],
+            catalogo_rows=[
+                make_catalogo_row(curso_id=t, catedra_id=10, tipo="teorico",
+                                  codigo=f"T{t}", dia=dias[t],
+                                  hora_inicio=time(14, 0), hora_fin=time(16, 0))
+                for t in catalogo
+            ],
+        )
+        return fake_conn
+
+    def _ids_de_teoricos(self, resp):
+        return [
+            tuple(c.id for c in p.opciones[0].cursos if c.tipo == "teorico")
+            for p in resp.planes
+        ]
+
+    # --- flag apagado (default): comportamiento de siempre --------------------
+
+    def test_default_trae_solo_el_teorico_obligado(self, fake_conn):
+        self._catedra_con_teoricos(fake_conn)
+        resp = armar_planes(fake_conn, _req([MateriaSeleccionada(codigo=1)]))
+
+        assert len(resp.planes) == 1
+        assert self._ids_de_teoricos(resp) == [(1000,)]
+
+    def test_default_no_toca_el_seminario_obligado(self, fake_conn):
+        setup_planes_db(
+            fake_conn,
+            [make_comision_row(comision_id=100, materia_codigo=1, catedra_id=10, dia="lunes")],
+            obliga_rows=[
+                make_obliga_row(comision_id=100, obliga_id=2000, catedra_id=10,
+                                tipo="seminario", codigo="S1", dia="martes"),
+            ],
+            catalogo_rows=[
+                make_catalogo_row(curso_id=2000, catedra_id=10, tipo="seminario",
+                                  codigo="S1", dia="martes"),
+                make_catalogo_row(curso_id=2001, catedra_id=10, tipo="seminario",
+                                  codigo="S2", dia="miercoles"),
+            ],
+        )
+        resp = armar_planes(fake_conn, _req([MateriaSeleccionada(codigo=1)]))
+
+        assert len(resp.planes) == 1
+        assert [c.id for c in resp.planes[0].opciones[0].cursos] == [100, 2000]
+
+    # --- teorico_libre --------------------------------------------------------
+
+    def test_teorico_libre_abre_todos_los_teoricos_de_la_catedra(self, fake_conn):
+        self._catedra_con_teoricos(fake_conn)
+        resp = armar_planes(
+            fake_conn, _req([MateriaSeleccionada(codigo=1, teorico_libre=True)])
+        )
+
+        assert sorted(self._ids_de_teoricos(resp)) == [(1000,), (1001,), (1002,)]
+        # La comisión es la misma en todos: lo único que cambia es el teórico.
+        assert {p.opciones[0].cursos[0].id for p in resp.planes} == {100}
+
+    def test_teorico_libre_pone_el_obligado_primero(self, fake_conn):
+        self._catedra_con_teoricos(fake_conn, obligados=(1002,))
+        resp = armar_planes(
+            fake_conn, _req([MateriaSeleccionada(codigo=1, teorico_libre=True)])
+        )
+
+        assert self._ids_de_teoricos(resp)[0] == (1002,)
+
+    def test_teorico_libre_no_duplica_el_obligado(self, fake_conn):
+        self._catedra_con_teoricos(fake_conn)
+        resp = armar_planes(
+            fake_conn, _req([MateriaSeleccionada(codigo=1, teorico_libre=True)])
+        )
+
+        teoricos = self._ids_de_teoricos(resp)
+        assert len(teoricos) == len(set(teoricos))
+
+    def test_teorico_libre_sin_otros_teoricos_no_cambia_nada(self, fake_conn):
+        self._catedra_con_teoricos(fake_conn, catalogo=(1000,))
+        resp = armar_planes(
+            fake_conn, _req([MateriaSeleccionada(codigo=1, teorico_libre=True)])
+        )
+
+        assert self._ids_de_teoricos(resp) == [(1000,)]
+
+    def test_teorico_libre_con_dos_obligados_toma_pares_distintos(self, fake_conn):
+        # Las 96 comisiones que obligan 2 teóricos: se mantiene la cantidad (2) y
+        # se libera cuáles.
+        self._catedra_con_teoricos(fake_conn, obligados=(1000, 1001))
+        resp = armar_planes(
+            fake_conn, _req([MateriaSeleccionada(codigo=1, teorico_libre=True)])
+        )
+
+        pares = self._ids_de_teoricos(resp)
+        assert all(len(p) == 2 for p in pares)
+        assert all(len(set(p)) == 2 for p in pares)
+        assert sorted(tuple(sorted(p)) for p in pares) == [
+            (1000, 1001), (1000, 1002), (1001, 1002)
+        ]
+        assert pares[0] == (1000, 1001)  # el par obligado va primero
+
+    # --- seminario_libre ------------------------------------------------------
+
+    def test_seminario_libre_abre_los_seminarios_de_la_catedra(self, fake_conn):
+        setup_planes_db(
+            fake_conn,
+            [make_comision_row(comision_id=100, materia_codigo=1, catedra_id=10, dia="lunes")],
+            obliga_rows=[
+                make_obliga_row(comision_id=100, obliga_id=2000, catedra_id=10,
+                                tipo="seminario", codigo="S1", dia="martes"),
+            ],
+            catalogo_rows=[
+                make_catalogo_row(curso_id=2000, catedra_id=10, tipo="seminario",
+                                  codigo="S1", dia="martes"),
+                make_catalogo_row(curso_id=2001, catedra_id=10, tipo="seminario",
+                                  codigo="S2", dia="miercoles"),
+            ],
+        )
+        resp = armar_planes(
+            fake_conn, _req([MateriaSeleccionada(codigo=1, seminario_libre=True)])
+        )
+
+        seminarios = [
+            [c.id for c in p.opciones[0].cursos if c.tipo == "seminario"]
+            for p in resp.planes
+        ]
+        assert seminarios == [[2000], [2001]]
+
+    def test_seminario_libre_no_toca_el_teorico(self, fake_conn):
+        self._catedra_con_teoricos(fake_conn)
+        resp = armar_planes(
+            fake_conn, _req([MateriaSeleccionada(codigo=1, seminario_libre=True)])
+        )
+
+        assert self._ids_de_teoricos(resp) == [(1000,)]
+
+    def test_ambos_flags_multiplican_las_opciones(self, fake_conn):
+        setup_planes_db(
+            fake_conn,
+            [make_comision_row(comision_id=100, materia_codigo=1, catedra_id=10, dia="lunes")],
+            obliga_rows=[
+                make_obliga_row(comision_id=100, obliga_id=1000, catedra_id=10,
+                                tipo="teorico", codigo="T1", dia="martes"),
+                make_obliga_row(comision_id=100, obliga_id=2000, catedra_id=10,
+                                tipo="seminario", codigo="S1", dia="jueves"),
+            ],
+            catalogo_rows=[
+                make_catalogo_row(curso_id=1000, catedra_id=10, tipo="teorico",
+                                  codigo="T1", dia="martes"),
+                make_catalogo_row(curso_id=1001, catedra_id=10, tipo="teorico",
+                                  codigo="T2", dia="miercoles"),
+                make_catalogo_row(curso_id=2000, catedra_id=10, tipo="seminario",
+                                  codigo="S1", dia="jueves"),
+                make_catalogo_row(curso_id=2001, catedra_id=10, tipo="seminario",
+                                  codigo="S2", dia="viernes"),
+            ],
+        )
+        resp = armar_planes(
+            fake_conn,
+            _req([MateriaSeleccionada(codigo=1, teorico_libre=True, seminario_libre=True)]),
+        )
+
+        combos = {
+            (
+                tuple(c.id for c in p.opciones[0].cursos if c.tipo == "teorico"),
+                tuple(c.id for c in p.opciones[0].cursos if c.tipo == "seminario"),
+            )
+            for p in resp.planes
+        }
+        assert combos == {
+            ((1000,), (2000,)), ((1000,), (2001,)),
+            ((1001,), (2000,)), ((1001,), (2001,)),
+        }
+
+    # --- comisiones sin obligación (independiente de los flags) ---------------
+
+    def test_sin_teorico_obligado_igual_asigna_uno(self, fake_conn):
+        # Prácticas Profesionales: ninguna comisión obliga teórico, pero la
+        # cátedra los dicta y hay que cursar alguno.
+        self._catedra_con_teoricos(fake_conn, obligados=(), catalogo=(1000, 1001))
+        resp = armar_planes(fake_conn, _req([MateriaSeleccionada(codigo=1)]))
+
+        assert sorted(self._ids_de_teoricos(resp)) == [(1000,), (1001,)]
+
+    def test_sin_teorico_obligado_el_flag_no_cambia_nada(self, fake_conn):
+        self._catedra_con_teoricos(fake_conn, obligados=(), catalogo=(1000, 1001))
+        resp = armar_planes(
+            fake_conn, _req([MateriaSeleccionada(codigo=1, teorico_libre=True)])
+        )
+
+        assert sorted(self._ids_de_teoricos(resp)) == [(1000,), (1001,)]
+
+    def test_catedra_sin_teoricos_no_inventa_ninguno(self, fake_conn):
+        # Requisito Idioma: la cátedra no dicta teóricos.
+        self._catedra_con_teoricos(fake_conn, obligados=(), catalogo=())
+        resp = armar_planes(
+            fake_conn, _req([MateriaSeleccionada(codigo=1, teorico_libre=True)])
+        )
+
+        assert len(resp.planes) == 1
+        assert [c.id for c in resp.planes[0].opciones[0].cursos] == [100]
+
+    @pytest.mark.parametrize("libre", [False, True])
+    def test_seminario_sin_obligacion_es_optativo(self, fake_conn, libre):
+        # Si ninguna comisión lo obliga, el seminario no entra al plan.
+        setup_planes_db(
+            fake_conn,
+            [make_comision_row(comision_id=100, materia_codigo=1, catedra_id=10, dia="lunes")],
+            catalogo_rows=[
+                make_catalogo_row(curso_id=2000, catedra_id=10, tipo="seminario",
+                                  codigo="S1", dia="martes"),
+                make_catalogo_row(curso_id=2001, catedra_id=10, tipo="seminario",
+                                  codigo="S2", dia="miercoles"),
+            ],
+        )
+        resp = armar_planes(
+            fake_conn, _req([MateriaSeleccionada(codigo=1, seminario_libre=libre)])
+        )
+
+        assert len(resp.planes) == 1
+        assert [c.id for c in resp.planes[0].opciones[0].cursos] == [100]
+
+    # --- interacción con el resto ---------------------------------------------
+
+    def test_las_partes_del_teorico_alternativo_entran_en_la_opcion(self, fake_conn):
+        self._catedra_con_teoricos(fake_conn, catalogo=(1000, 1001))
+        fake_conn._rules = [
+            r for r in fake_conn._rules if r["match"] != "where p.parte_de_id"
+        ]
+        fake_conn.on("where p.parte_de_id", rows=[
+            make_parte_row(parte_de_id=1001, parte_id=5001, tipo="teorico", codigo="T1001",
+                           catedra_id=10, dia="viernes",
+                           hora_inicio=time(14, 0), hora_fin=time(16, 0)),
+        ])
+        resp = armar_planes(
+            fake_conn, _req([MateriaSeleccionada(codigo=1, teorico_libre=True)])
+        )
+
+        con_1001 = next(
+            p for p in resp.planes
+            if any(c.id == 1001 for c in p.opciones[0].cursos)
+        )
+        assert [c.id for c in con_1001.opciones[0].cursos] == [100, 1001, 5001]
+
+    def test_teorico_alternativo_que_solapa_se_descarta(self, fake_conn):
+        # M2 ocupa el miércoles 14-16, que es el horario del teórico 1001.
+        setup_planes_db(
+            fake_conn,
+            [
+                make_comision_row(comision_id=100, materia_codigo=1, materia_nombre="M1",
+                                  catedra_id=10, dia="lunes",
+                                  hora_inicio=time(10, 0), hora_fin=time(12, 0)),
+                make_comision_row(comision_id=200, materia_codigo=2, materia_nombre="M2",
+                                  catedra_id=20, dia="miercoles",
+                                  hora_inicio=time(14, 0), hora_fin=time(16, 0)),
+            ],
+            obliga_rows=[
+                make_obliga_row(comision_id=100, obliga_id=1000, catedra_id=10,
+                                tipo="teorico", codigo="T1", dia="martes",
+                                hora_inicio=time(14, 0), hora_fin=time(16, 0)),
+            ],
+            catalogo_rows=[
+                make_catalogo_row(curso_id=1000, catedra_id=10, tipo="teorico", codigo="T1",
+                                  dia="martes", hora_inicio=time(14, 0), hora_fin=time(16, 0)),
+                make_catalogo_row(curso_id=1001, catedra_id=10, tipo="teorico", codigo="T2",
+                                  dia="miercoles", hora_inicio=time(14, 0), hora_fin=time(16, 0)),
+            ],
+        )
+        resp = armar_planes(
+            fake_conn,
+            _req([
+                MateriaSeleccionada(codigo=1, teorico_libre=True),
+                MateriaSeleccionada(codigo=2),
+            ]),
+        )
+
+        assert self._ids_de_teoricos(resp) == [(1000,)]
+
+    def test_combina_con_franjas_excluidas_y_solo_con_cupos(self, fake_conn):
+        self._catedra_con_teoricos(fake_conn)
+        franja = FranjaExcluida(dias=["miercoles"], hora_inicio=time(13, 0), hora_fin=time(18, 0))
+        resp = armar_planes(
+            fake_conn,
+            _req(
+                [MateriaSeleccionada(codigo=1, teorico_libre=True)],
+                franjas_excluidas=[franja],
+                solo_con_cupos=True,
+            ),
+        )
+
+        # 1001 cae en la franja bloqueada; la comisión tiene vacantes (default 30).
+        assert sorted(self._ids_de_teoricos(resp)) == [(1000,), (1002,)]
+
+    def test_combina_con_sede_por_materia(self, fake_conn):
+        setup_planes_db(
+            fake_conn,
+            [make_comision_row(comision_id=100, materia_codigo=1, catedra_id=10,
+                               dia="lunes", sede="HY")],
+            obliga_rows=[
+                make_obliga_row(comision_id=100, obliga_id=1000, catedra_id=10,
+                                tipo="teorico", codigo="T1", dia="martes", sede="HY"),
+            ],
+            catalogo_rows=[
+                make_catalogo_row(curso_id=1000, catedra_id=10, tipo="teorico",
+                                  codigo="T1", dia="martes", sede="HY"),
+                make_catalogo_row(curso_id=1001, catedra_id=10, tipo="teorico",
+                                  codigo="T2", dia="miercoles", sede="IN"),
+            ],
+        )
+        resp = armar_planes(
+            fake_conn,
+            _req([MateriaSeleccionada(codigo=1, teorico_libre=True, sede="HY")]),
+        )
+
+        assert self._ids_de_teoricos(resp) == [(1000,)]
+
+    def test_planes_con_la_misma_comision_no_se_deduplican(self, fake_conn):
+        # _opcion_key mira todos los cursos: si sólo mirara la comisión, el
+        # reorden round-robin trataría estas opciones como la misma.
+        self._catedra_con_teoricos(fake_conn)
+        resp = armar_planes(
+            fake_conn, _req([MateriaSeleccionada(codigo=1, teorico_libre=True)])
+        )
+
+        claves = {
+            tuple(c.id for c in p.opciones[0].cursos) for p in resp.planes
+        }
+        assert len(claves) == len(resp.planes) == 3

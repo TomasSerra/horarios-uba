@@ -258,6 +258,37 @@ def make_obliga_row(
     }
 
 
+def make_catalogo_row(
+    *,
+    curso_id,
+    tipo="teorico",
+    codigo="T1",
+    catedra_id=1,
+    dia="martes",
+    hora_inicio=time(14, 0),
+    hora_fin=time(16, 0),
+    aula="HY102",
+    profesor=None,
+    sede="HY",
+    vacantes=None,
+):
+    """Fila como la devuelve _fetch_opciones_por_materia (query del catálogo de
+    teóricos y seminarios de la cátedra)."""
+    return {
+        "id": curso_id,
+        "tipo": tipo,
+        "codigo": codigo,
+        "dia": dia,
+        "hora_inicio": hora_inicio,
+        "hora_fin": hora_fin,
+        "aula": aula,
+        "profesor": profesor,
+        "sede": sede,
+        "catedra_id": catedra_id,
+        "vacantes": vacantes,
+    }
+
+
 def make_parte_row(
     *,
     parte_de_id,
@@ -294,16 +325,26 @@ def make_parte_row(
 
 
 def setup_planes_db(
-    fake_conn, comision_rows, obliga_rows=None, parte_rows=None, congeladas=()
+    fake_conn,
+    comision_rows,
+    obliga_rows=None,
+    parte_rows=None,
+    catalogo_rows=None,
+    congeladas=(),
 ):
     """Registra las queries que ejecuta armar_planes:
     1) FROM materias m JOIN catedras ca JOIN cursos com ...
     2) FROM comision_obliga co JOIN cursos t ...
-    3) FROM cursos p WHERE p.parte_de_id = ANY(...) — encuentros extra.
-    4) materias con la oferta congelada (sólo si el request trae solo_con_cupos).
+    3) teóricos y seminarios de las cátedras (catálogo para los flags libres).
+    4) FROM cursos p WHERE p.parte_de_id = ANY(...) — encuentros extra.
+    5) materias con la oferta congelada (sólo si el request trae solo_con_cupos).
+
+    `catalogo_rows` vacío = la cátedra no dicta teóricos ni seminarios más allá de
+    los obligados, que es lo que asumen los tests que no lo pasan.
     """
     fake_conn.on("from materias m", rows=comision_rows)
     fake_conn.on("from comision_obliga co", rows=obliga_rows or [])
+    fake_conn.on("t.tipo in ('teorico', 'seminario')", rows=catalogo_rows or [])
     fake_conn.on("where p.parte_de_id", rows=parte_rows or [])
     fake_conn.on(
         "where oferta_congelada", rows=[{"codigo": c} for c in congeladas]

@@ -2,7 +2,7 @@
 
 Dada una selección de materias y restricciones del usuario, genera todas las
 combinaciones válidas (sin solapamiento horario) — una opción por materia,
-donde cada opción es comisión + sus cursos obligados (teóricos/seminarios).
+donde cada opción es comisión + los teóricos/seminarios que la acompañan.
 """
 
 from __future__ import annotations
@@ -53,6 +53,18 @@ class MateriaSeleccionada(BaseModel):
             "Código de la comisión a fijar. Requiere catedra_id: los códigos "
             "de comisión son únicos por cátedra, no globalmente."
         ),
+    )
+    teorico_libre: bool = Field(
+        default=False,
+        description=(
+            "Si es True, la comisión puede ir con cualquier teórico de su "
+            "cátedra en vez de sólo con el que obliga. False (default) = "
+            "comportamiento atado de siempre."
+        ),
+    )
+    seminario_libre: bool = Field(
+        default=False,
+        description="Idem teorico_libre, para los seminarios.",
     )
 
     @model_validator(mode="after")
@@ -246,18 +258,20 @@ def _plan_respeta_dias_horas(
     return True
 
 
-def _opcion_key(op: OpcionMateria) -> int:
-    # La comisión siempre es el primer curso (ver _fetch_opciones_por_materia).
-    return op.cursos[0].id
+def _opcion_key(op: OpcionMateria) -> tuple[int, ...]:
+    # Todos los cursos, no sólo la comisión: con teorico_libre/seminario_libre dos
+    # opciones distintas comparten comisión y sólo se diferencian en el teórico.
+    return tuple(c.id for c in op.cursos)
 
 
-def _differs_in(p1: Plan, p2: Plan, idx: int) -> bool:
-    return _opcion_key(p1.opciones[idx]) != _opcion_key(p2.opciones[idx])
+# Firma de un plan: una clave de opción por materia. Se compara entre planes para
+# decidir el orden.
+PlanKey = tuple[tuple[int, ...], ...]
 
 
-def _differs_only_in(p1: Plan, p2: Plan, idx: int) -> bool:
-    for i, (a, b) in enumerate(zip(p1.opciones, p2.opciones)):
-        same = _opcion_key(a) == _opcion_key(b)
+def _differs_only_in(k1: PlanKey, k2: PlanKey, idx: int) -> bool:
+    for i, (a, b) in enumerate(zip(k1, k2)):
+        same = a == b
         if i == idx and same:
             return False
         if i != idx and not same:
@@ -272,24 +286,26 @@ def _reorder_round_robin(planes: list[Plan], num_materias: int) -> list[Plan]:
     cambie esa materia (entre otras) y, en última instancia, a cualquiera."""
     if len(planes) <= 1 or num_materias <= 1:
         return planes
-    pool = list(planes)
+    # Las claves se calculan una sola vez: el matching es O(n²) sobre un pool de
+    # hasta 1000 planes, y recalcularlas en cada comparación domina el costo.
+    pool = [(p, tuple(_opcion_key(op) for op in p.opciones)) for p in planes]
     ordered = [pool.pop(0)]
     while pool:
         target = (len(ordered) - 1) % num_materias
-        prev = ordered[-1]
+        prev = ordered[-1][1]
         idx = next(
-            (i for i, p in enumerate(pool) if _differs_only_in(prev, p, target)),
+            (i for i, (_, k) in enumerate(pool) if _differs_only_in(prev, k, target)),
             None,
         )
         if idx is None:
             idx = next(
-                (i for i, p in enumerate(pool) if _differs_in(prev, p, target)),
+                (i for i, (_, k) in enumerate(pool) if prev[target] != k[target]),
                 None,
             )
         if idx is None:
             idx = 0
         ordered.append(pool.pop(idx))
-    return ordered
+    return [p for p, _ in ordered]
 
 
 def _enumerar_combos(
@@ -379,9 +395,49 @@ def _hay_solapamiento(cursos: Iterable[CursoEnPlan]) -> bool:
     return False
 
 
-def _fetch_opciones_por_materia(conn, materia_codigos: list[int]) -> dict[int, list[OpcionMateria]]:
+def _variantes_de_tipo(
+    obligados: list[CursoEnPlan],
+    catalogo: list[CursoEnPlan],
+    libre: bool,
+    requerido: bool,
+) -> list[tuple[CursoEnPlan, ...]]:
+    """Cursos de un tipo (teórico o seminario) que puede llevar una comisión.
+
+    La primera variante es siempre la "natural" (la que arma el plan de hoy): el
+    orden importa porque `_enumerar_combos` explora los índices bajos primero.
+
+    `requerido` distingue los dos tipos cuando la comisión no obliga ninguno: al
+    teórico hay que cursarlo igual (va cualquiera de la cátedra), mientras que un
+    seminario que nadie obliga es optativo y no entra al plan.
+    """
+    if obligados:
+        # Con tantos cursos en la cátedra como obligados hay una sola combinación
+        # posible, que es la obligada.
+        if not libre or len(catalogo) <= len(obligados):
+            return [tuple(obligados)]
+        ids = {c.id for c in obligados}
+        return [
+            tuple(obligados),
+            *(
+                combo
+                for combo in combinations(catalogo, len(obligados))
+                if {c.id for c in combo} != ids
+            ),
+        ]
+    if not requerido or not catalogo:
+        return [()]
+    return [(c,) for c in catalogo]
+
+
+def _fetch_opciones_por_materia(
+    conn, materia_codigos: list[int], libres: dict[int, tuple[bool, bool]]
+) -> dict[int, list[OpcionMateria]]:
     """Para cada materia, devuelve todas sus opciones de cursada
-    (una por comisión, con sus obligaciones y sus partes expandidas).
+    (comisión + teóricos/seminarios que le corresponden, con sus partes expandidas).
+
+    `libres` mapea materia -> (teorico_libre, seminario_libre): con el flag en
+    True la comisión puede llevar cualquier curso de ese tipo de su cátedra en vez
+    del que obliga. Ver `_variantes_de_tipo` para las cuatro situaciones.
 
     Sólo cátedras vigentes: los cursos de una cátedra que dejó de dictarse siguen
     en la DB (los necesitan las reseñas) pero no deben generar planes. Sin este
@@ -431,8 +487,31 @@ def _fetch_opciones_por_materia(conn, materia_codigos: list[int]) -> dict[int, l
         cid = r.pop("comision_id")
         obliga_map[cid].append(CursoEnPlan(**r))
 
-    # Encuentros extra de las comisiones y de sus obligados. Van sí o sí con el
-    # curso al que pertenecen: inscribirse en la comisión te inscribe en todos.
+    # Todos los teóricos y seminarios de las cátedras en juego. Se trae siempre
+    # (no sólo con los flags prendidos) porque una comisión que no obliga teórico
+    # igual tiene que llevar uno.
+    catalogo_rows = conn.execute(
+        """
+        SELECT t.id, t.tipo::text AS tipo, t.codigo, t.dia,
+               t.hora_inicio, t.hora_fin, t.aula, t.profesor, t.sede,
+               t.catedra_id, t.vacantes
+          FROM cursos t
+         WHERE t.catedra_id = ANY(%s)
+           AND t.tipo IN ('teorico', 'seminario')
+           AND t.parte_de_id IS NULL
+         ORDER BY t.tipo, LENGTH(t.codigo), t.codigo
+        """,
+        (sorted({r["catedra_id"] for r in rows}),),
+    ).fetchall()
+
+    catalogo: dict[tuple[int, str], list[CursoEnPlan]] = defaultdict(list)
+    for r in catalogo_rows:
+        curso = CursoEnPlan(**r)
+        catalogo[(curso.catedra_id, curso.tipo)].append(curso)
+
+    # Encuentros extra de las comisiones y de los cursos que las acompañan. Van sí
+    # o sí con el curso al que pertenecen: inscribirse en la comisión te inscribe
+    # en todos.
     partes_rows = conn.execute(
         """
         SELECT p.parte_de_id,
@@ -443,7 +522,11 @@ def _fetch_opciones_por_materia(conn, materia_codigos: list[int]) -> dict[int, l
          WHERE p.parte_de_id = ANY(%s)
          ORDER BY p.id
         """,
-        (comision_ids + [r["id"] for r in obliga_rows],),
+        (
+            comision_ids
+            + [r["id"] for r in obliga_rows]
+            + [r["id"] for r in catalogo_rows],
+        ),
     ).fetchall()
 
     partes_map: dict[int, list[CursoEnPlan]] = defaultdict(list)
@@ -453,8 +536,10 @@ def _fetch_opciones_por_materia(conn, materia_codigos: list[int]) -> dict[int, l
     def _con_partes(curso: CursoEnPlan) -> list[CursoEnPlan]:
         return [curso, *partes_map.get(curso.id, [])]
 
-    opciones_por_materia: dict[int, list[OpcionMateria]] = {cod: [] for cod in materia_codigos}
-    for r in rows:
+    # Se acumulan con (variante, orden de la comisión) para poder ordenar después.
+    buckets: dict[int, list[tuple[int, int, OpcionMateria]]] = defaultdict(list)
+    for orden, r in enumerate(rows):
+        teorico_libre, seminario_libre = libres.get(r["materia_codigo"], (False, False))
         comision = CursoEnPlan(
             id=r["comision_id"],
             tipo="comision",
@@ -468,26 +553,55 @@ def _fetch_opciones_por_materia(conn, materia_codigos: list[int]) -> dict[int, l
             catedra_id=r["catedra_id"],
             vacantes=r["vacantes"],
         )
-        # La comisión principal queda primera: `_opcion_key` y `solo_con_cupos`
-        # leen cursos[0] (es la única fila que trae las vacantes).
-        cursos = [
-            *_con_partes(comision),
-            *(
-                c
-                for obliga in obliga_map.get(r["comision_id"], [])
-                for c in _con_partes(obliga)
-            ),
-        ]
-        opciones_por_materia[r["materia_codigo"]].append(
-            OpcionMateria(
-                materia_codigo=r["materia_codigo"],
-                materia_nombre=r["materia_nombre"],
-                catedra_id=r["catedra_id"],
-                catedra_numero=r["catedra_numero"],
-                catedra_titular=r["catedra_titular"],
-                cursos=cursos,
-            )
+        obligados = obliga_map.get(r["comision_id"], [])
+        variantes_teorico = _variantes_de_tipo(
+            [c for c in obligados if c.tipo == "teorico"],
+            catalogo.get((r["catedra_id"], "teorico"), []),
+            teorico_libre,
+            requerido=True,
         )
+        variantes_seminario = _variantes_de_tipo(
+            [c for c in obligados if c.tipo == "seminario"],
+            catalogo.get((r["catedra_id"], "seminario"), []),
+            seminario_libre,
+            requerido=False,
+        )
+        # La comisión principal queda primera: `solo_con_cupos` lee cursos[0] (es
+        # la única fila que trae las vacantes).
+        base = _con_partes(comision)
+        for variante, (teoricos, seminarios) in enumerate(
+            iproduct(variantes_teorico, variantes_seminario)
+        ):
+            cursos = [
+                *base,
+                *(c for extra in (*teoricos, *seminarios) for c in _con_partes(extra)),
+            ]
+            # model_construct saltea la validación: los valores ya salieron de
+            # modelos validados y con los flags libres esto corre decenas de miles
+            # de veces por request.
+            buckets[r["materia_codigo"]].append(
+                (
+                    variante,
+                    orden,
+                    OpcionMateria.model_construct(
+                        materia_codigo=r["materia_codigo"],
+                        materia_nombre=r["materia_nombre"],
+                        catedra_id=r["catedra_id"],
+                        catedra_numero=r["catedra_numero"],
+                        catedra_titular=r["catedra_titular"],
+                        cursos=cursos,
+                    ),
+                )
+            )
+
+    # Primero todas las opciones naturales (una por comisión, en el orden de la
+    # query) y recién después las recombinadas: `_enumerar_combos` explora los
+    # índices bajos primero, así que sin esto los primeros planes serían todos la
+    # misma comisión con distinto teórico.
+    opciones_por_materia: dict[int, list[OpcionMateria]] = {cod: [] for cod in materia_codigos}
+    for cod, items in buckets.items():
+        items.sort(key=lambda t: (t[0], t[1]))
+        opciones_por_materia[cod] = [op for _, _, op in items]
     return opciones_por_materia
 
 
@@ -513,7 +627,11 @@ def armar_planes(conn, req: PlanRequest) -> PlanResponse:
         else set()
     )
 
-    opciones_por_materia = _fetch_opciones_por_materia(conn, materia_codigos)
+    opciones_por_materia = _fetch_opciones_por_materia(
+        conn,
+        materia_codigos,
+        {m.codigo: (m.teorico_libre, m.seminario_libre) for m in req.materias},
+    )
 
     opciones_validas: list[list[OpcionMateria]] = []
     materias_sin_opciones: list[int] = []

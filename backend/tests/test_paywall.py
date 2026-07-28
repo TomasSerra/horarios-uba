@@ -61,6 +61,17 @@ class TestRequestUsesFilters:
     def test_sede_por_materia_dispara(self):
         assert _uses(_req([MateriaSeleccionada(codigo=1, sede="HY")])) is True
 
+    def test_teorico_libre_dispara(self):
+        assert _uses(_req([MateriaSeleccionada(codigo=1, teorico_libre=True)])) is True
+
+    def test_seminario_libre_dispara(self):
+        assert _uses(_req([MateriaSeleccionada(codigo=1, seminario_libre=True)])) is True
+
+    def test_libres_en_false_NO_disparan(self):
+        # False = atado = comportamiento default, no es feature Pro.
+        materia = MateriaSeleccionada(codigo=1, teorico_libre=False, seminario_libre=False)
+        assert _uses(_req([materia])) is False
+
     def test_min_dias_semana_dispara(self):
         assert _uses(_req(min_dias_semana=2)) is True
 
@@ -115,6 +126,14 @@ class TestMateriasAnuales:
 
     def test_sede_en_materia_anual_igual_dispara(self):
         req = _req([MateriaSeleccionada(codigo=4, sede="HY")])
+        assert _uses(req, anuales={4}) is True
+
+    def test_teorico_libre_en_materia_anual_igual_dispara(self):
+        req = _req([MateriaSeleccionada(codigo=4, teorico_libre=True)])
+        assert _uses(req, anuales={4}) is True
+
+    def test_seminario_libre_en_materia_anual_igual_dispara(self):
+        req = _req([MateriaSeleccionada(codigo=4, seminario_libre=True)])
         assert _uses(req, anuales={4}) is True
 
     def test_filtro_global_con_materia_anual_igual_dispara(self):
@@ -203,6 +222,36 @@ class TestPlanesEndpointGating:
         req = _req(max_planes=80)
         post_planes(req, user=AuthUser(id="uid-pro"))
         assert req.max_planes == 80
+
+    def test_anonimo_con_teorico_libre_da_403(self, monkeypatch, fake_pool, fake_conn):
+        _setup_pool_and_sub(monkeypatch, fake_pool, fake_conn, has_sub=False)
+        req = _req([MateriaSeleccionada(codigo=1, teorico_libre=True)])
+        with pytest.raises(HTTPException) as exc:
+            post_planes(req, user=None)
+        assert exc.value.status_code == 403
+
+    def test_free_logueado_con_seminario_libre_da_403(self, monkeypatch, fake_pool, fake_conn):
+        _setup_pool_and_sub(monkeypatch, fake_pool, fake_conn, has_sub=False)
+        req = _req([MateriaSeleccionada(codigo=1, seminario_libre=True)])
+        with pytest.raises(HTTPException) as exc:
+            post_planes(req, user=AuthUser(id="uid-free"))
+        assert exc.value.status_code == 403
+
+    def test_free_con_teorico_libre_en_materia_anual_da_403(
+        self, monkeypatch, fake_pool, fake_conn
+    ):
+        # La exención de las anuales cubre cátedra y comisión, no esto.
+        _setup_pool_and_sub(monkeypatch, fake_pool, fake_conn, has_sub=False, anuales=(1,))
+        req = _req([MateriaSeleccionada(codigo=1, catedra_id=10, teorico_libre=True)])
+        with pytest.raises(HTTPException) as exc:
+            post_planes(req, user=AuthUser(id="uid-free"))
+        assert exc.value.status_code == 403
+
+    def test_pro_con_libres_pasa(self, monkeypatch, fake_pool, fake_conn):
+        _setup_pool_and_sub(monkeypatch, fake_pool, fake_conn, has_sub=True)
+        req = _req([MateriaSeleccionada(codigo=1, teorico_libre=True, seminario_libre=True)])
+        resp = post_planes(req, user=AuthUser(id="uid-pro"))
+        assert resp is not None
 
     def test_pro_con_filtros_pasa(self, monkeypatch, fake_pool, fake_conn):
         _setup_pool_and_sub(monkeypatch, fake_pool, fake_conn, has_sub=True)
