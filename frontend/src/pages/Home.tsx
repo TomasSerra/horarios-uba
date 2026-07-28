@@ -64,6 +64,21 @@ interface SeleccionConNombre extends MateriaSeleccionada {
   anual: boolean;
 }
 
+// Selección → lo que viaja a /planes. Se usa también para la firma que decide si
+// "Generar" está habilitado, así que las claves van explícitas y en orden fijo:
+// dos objetos con las mismas claves en distinto orden dan JSON.stringify distinto.
+function toMateriaRequest(m: SeleccionConNombre): MateriaSeleccionada {
+  return {
+    codigo: m.codigo,
+    catedra_id: m.catedra_id,
+    profesores: m.profesores,
+    sede: m.sede ?? null,
+    comision_codigo: m.comision_codigo ?? null,
+    teorico_libre: m.teorico_libre ?? false,
+    seminario_libre: m.seminario_libre ?? false,
+  };
+}
+
 interface PagoErrorState {
   status: string | null;
   statusDetail: string | null;
@@ -352,6 +367,8 @@ interface UrlState {
     p: string[] | null;
     se?: string | null;
     co?: string | null;
+    tl?: boolean;
+    sl?: boolean;
   }[];
   d: string[];
   f: FranjaExcluida[];
@@ -469,10 +486,12 @@ export function Home() {
               (x) =>
                 x.p !== null ||
                 (x.se ?? null) !== null ||
+                x.tl === true ||
+                x.sl === true ||
                 (!esAnual(x.c) &&
                   (x.ca !== null || (x.co ?? null) !== null)),
             ));
-        const safeDecoded = proFiltersInUrl
+        const safeDecoded: UrlState = proFiltersInUrl
           ? {
               ...decoded,
               m: decoded.m.map((x) =>
@@ -480,6 +499,8 @@ export function Home() {
                   ? { c: x.c, ca: x.ca, p: null, se: null, co: x.co ?? null }
                   : { c: x.c, ca: null, p: null, se: null, co: null },
               ),
+              // Ninguna rama copia tl/sl: son Pro en todas las materias, incluidas
+              // las anuales, así que el strip los deja siempre en false.
               f: [],
               s: [],
               b: null,
@@ -495,6 +516,8 @@ export function Home() {
           profesores: x.p,
           sede: x.se ?? null,
           comision_codigo: x.co ?? null,
+          teorico_libre: x.tl ?? false,
+          seminario_libre: x.sl ?? false,
           anual: esAnual(x.c),
           nombre: byCodigo.get(x.c)?.nombre ?? `Materia ${x.c}`,
         }));
@@ -598,15 +621,7 @@ export function Home() {
   const currentSignature = useMemo(
     () =>
       JSON.stringify({
-        materias: materias.map(
-          ({ codigo, catedra_id, profesores, sede, comision_codigo }) => ({
-            codigo,
-            catedra_id,
-            profesores,
-            sede: sede ?? null,
-            comision_codigo: comision_codigo ?? null,
-          }),
-        ),
+        materias: materias.map(toMateriaRequest),
         diasPermitidos: [...diasPermitidos].sort(),
         franjas,
         sedesPermitidas: [...sedesPermitidas].sort(),
@@ -695,15 +710,7 @@ export function Home() {
         : null;
       const data = await api.postPlanes(
         {
-          materias: seleccion.map(
-            ({ codigo, catedra_id, profesores, sede, comision_codigo }) => ({
-              codigo,
-              catedra_id,
-              profesores,
-              sede: sede ?? null,
-              comision_codigo: comision_codigo ?? null,
-            }),
-          ),
+          materias: seleccion.map(toMateriaRequest),
           dias_excluidos,
           franjas_excluidas: franjasExcl,
           sedes_permitidas: sedes,
@@ -720,15 +727,7 @@ export function Home() {
       scrollOnNextResultRef.current = true;
       setResultado(data);
       const sig = JSON.stringify({
-        materias: seleccion.map(
-          ({ codigo, catedra_id, profesores, sede, comision_codigo }) => ({
-            codigo,
-            catedra_id,
-            profesores,
-            sede: sede ?? null,
-            comision_codigo: comision_codigo ?? null,
-          }),
-        ),
+        materias: seleccion.map(toMateriaRequest),
         diasPermitidos: [...dias].sort(),
         franjas: franjasExcl,
         sedesPermitidas: [...sedes].sort(),
@@ -758,6 +757,8 @@ export function Home() {
           profesores: m.profesores,
           sede: m.sede ?? null,
           comision_codigo: m.comision_codigo ?? null,
+          teorico_libre: m.teorico_libre ?? false,
+          seminario_libre: m.seminario_libre ?? false,
           anual: m.anual,
         })),
       };
@@ -765,15 +766,7 @@ export function Home() {
       if (data.planes.length > 0) {
         pushHistory(uid, {
           request: {
-            materias: seleccion.map(
-              ({ codigo, catedra_id, profesores, sede, comision_codigo }) => ({
-                codigo,
-                catedra_id,
-                profesores,
-                sede: sede ?? null,
-                comision_codigo: comision_codigo ?? null,
-              }),
-            ),
+            materias: seleccion.map(toMateriaRequest),
             dias_excluidos,
             franjas_excluidas: franjasExcl,
             sedes_permitidas: sedes,
@@ -796,6 +789,8 @@ export function Home() {
           p: m.profesores,
           se: m.sede ?? null,
           co: m.comision_codigo ?? null,
+          tl: m.teorico_libre || undefined,
+          sl: m.seminario_libre || undefined,
         })),
         d: dias,
         f: franjasExcl,
@@ -892,6 +887,8 @@ export function Home() {
       profesores: m.profesores,
       sede: m.sede ?? null,
       comision_codigo: m.comision_codigo ?? null,
+      teorico_libre: m.teorico_libre ?? false,
+      seminario_libre: m.seminario_libre ?? false,
     }));
     const dias = ALL_DIAS.filter(
       (d) => !entry.filters.dias_excluidos.includes(d),
@@ -920,15 +917,7 @@ export function Home() {
     setError(false);
     setLastGeneratedSignature(
       JSON.stringify({
-        materias: seleccion.map(
-          ({ codigo, catedra_id, profesores, sede, comision_codigo }) => ({
-            codigo,
-            catedra_id,
-            profesores,
-            sede: sede ?? null,
-            comision_codigo: comision_codigo ?? null,
-          }),
-        ),
+        materias: seleccion.map(toMateriaRequest),
         diasPermitidos: [...dias].sort(),
         franjas: entry.filters.franjas_excluidas,
         sedesPermitidas: [...entry.filters.sedes_permitidas].sort(),
@@ -948,6 +937,8 @@ export function Home() {
         p: m.profesores,
         se: m.sede ?? null,
         co: m.comision_codigo ?? null,
+        tl: m.teorico_libre || undefined,
+        sl: m.seminario_libre || undefined,
       })),
       d: dias,
       f: entry.filters.franjas_excluidas,

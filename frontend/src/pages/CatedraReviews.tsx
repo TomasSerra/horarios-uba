@@ -1,10 +1,4 @@
-import {
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import {
   keepPreviousData,
@@ -54,6 +48,7 @@ import { useAuth } from "@/lib/useAuth";
 import { useSubscription } from "@/lib/useSubscription";
 import { usePaywall } from "@/lib/paywall";
 import { useAlert } from "@/lib/alert";
+import { useClampRows } from "@/lib/useClampRows";
 import { cn } from "@/lib/utils";
 import type {
   CatedraReviewsResponse,
@@ -154,14 +149,6 @@ function ProfesoresFilter({
   selected: string | null;
   onSelect: (profesor: string | null) => void;
 }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [expanded, setExpanded] = useState(false);
-  // Altura (px) del bloque de 2 filas y media; null = no hace falta clampear.
-  const [collapsedHeight, setCollapsedHeight] = useState<number | null>(null);
-  // Índice del primer chip de la 3ra fila: de ahí en adelante están cortados y
-  // no se leen enteros, así que expanden en vez de filtrar.
-  const [cutFromIndex, setCutFromIndex] = useState<number | null>(null);
-
   const ordenados = useMemo(() => {
     return [...profesores].sort((a, b) => {
       const ar = a.avg_rating ?? -1;
@@ -172,44 +159,15 @@ function ProfesoresFilter({
     });
   }, [profesores]);
 
-  useLayoutEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const reset = () => {
-      setCollapsedHeight(null);
-      setCutFromIndex(null);
-    };
-    const measure = () => {
-      const chips = Array.from(el.children) as HTMLElement[];
-      if (chips.length === 0) return reset();
-      // Posiciones relativas al contenedor (getBoundingClientRect, no offsetTop:
-      // offsetTop es relativo al offsetParent posicionado, no a este div).
-      // Redondeamos el top para que el subpixel no invente filas de más.
-      const cTop = el.getBoundingClientRect().top;
-      const rects = chips.map((c) => {
-        const r = c.getBoundingClientRect();
-        return { top: Math.round(r.top - cTop), bottom: r.bottom - cTop };
-      });
-      const tops = Array.from(new Set(rects.map((r) => r.top))).sort(
-        (a, b) => a - b
-      );
-      if (tops.length <= 2) return reset();
-      // Cortamos a mitad de la 3ra fila. tops[2] ya incluye el gap, así que
-      // alcanza con sumarle media altura de los chips de esa fila.
-      const tercerFila = rects.filter((r) => r.top === tops[2]);
-      const altoTercerFila =
-        Math.max(...tercerFila.map((r) => r.bottom)) - tops[2];
-      setCollapsedHeight(tops[2] + altoTercerFila / 2);
-      // `rects` sigue el orden de `ordenados`, así que el índice mapea directo.
-      setCutFromIndex(rects.findIndex((r) => r.top === tops[2]));
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [ordenados]);
-
-  const clamp = collapsedHeight != null && !expanded;
+  // `cutFromIndex` mapea directo a `ordenados`: el hook mide los hijos en orden.
+  const {
+    containerRef,
+    expanded,
+    setExpanded,
+    collapsedHeight,
+    cutFromIndex,
+    clamp,
+  } = useClampRows(2, [ordenados]);
 
   return (
     <div className="space-y-2">

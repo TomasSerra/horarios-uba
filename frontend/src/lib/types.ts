@@ -62,6 +62,10 @@ export interface MateriaSeleccionada {
   // Comisión exacta dentro de la cátedra elegida. Requiere catedra_id: los
   // códigos de comisión se repiten entre cátedras.
   comision_codigo?: string | null;
+  // Desatan la comisión del teórico/seminario que obliga: puede ir con cualquiera
+  // de su cátedra. false (default) = atado, como siempre.
+  teorico_libre?: boolean;
+  seminario_libre?: boolean;
 }
 
 export interface PlanRequest {
@@ -97,6 +101,10 @@ export interface CatedraOpcion {
   // Reseñas de la cátedra (para mostrar estrellas en el selector del planner).
   avg_rating: number | null;
   review_count: number;
+  // Si alguna comisión de la cátedra obliga un teórico / un seminario. Los
+  // toggles de "coincide con su práctico" sólo se muestran cuando hay obligación.
+  obliga_teorico?: boolean;
+  obliga_seminario?: boolean;
 }
 
 export interface ProfesorRating {
@@ -136,6 +144,8 @@ export interface FavoriteFilters {
     profesores: string[] | null;
     sede?: string | null;
     comision_codigo?: string | null;
+    teorico_libre?: boolean;
+    seminario_libre?: boolean;
     // Snapshot: define si cátedra/comisión contaban como filtro Pro. Ausente en
     // entradas de historial viejas → se asume false (el lado seguro).
     anual?: boolean;

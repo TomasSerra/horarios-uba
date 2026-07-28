@@ -85,7 +85,7 @@ URLs locales: FE `http://localhost:5173`, API `http://localhost:8000`, Swagger `
 - `subscriptions(clerk_user_id, valid_from, valid_until, mp_payment_id, mp_external_reference, ...)` — pagos de MP. `clerk_user_id` es nombre histórico: hoy almacena el `uid` de Firebase (string opaco). No hay tabla `users` propia.
 - `favorite_plans(clerk_user_id, plan_data, filters_data, ...)` — planes guardados por usuarios Pro.
 
-Una "opción" para una materia = (comisión + sus obligas). Un "plan" = una opción por cada materia seleccionada, sin solapamientos horarios.
+Una "opción" para una materia = (comisión + el teórico/seminario que la acompaña). Un "plan" = una opción por cada materia seleccionada, sin solapamientos horarios. Qué teórico/seminario acompaña a cada comisión no siempre es el que obliga: los filtros Pro `teorico_libre` / `seminario_libre` la dejan ir con cualquiera de su cátedra, y cuando no hay obligación la regla depende del tipo — detalle en [backend/CLAUDE.md](backend/CLAUDE.md#teórico-y-seminario-libres).
 
 ## Auth flow (resumen)
 

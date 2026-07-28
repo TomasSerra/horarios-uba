@@ -91,6 +91,7 @@ export function entryUsesProFilters(entry: PlanHistoryEntry): boolean {
   for (const m of f.materias) {
     if (m.profesores !== null) return true;
     if (m.sede) return true;
+    if (m.teorico_libre || m.seminario_libre) return true;
     // En materias anuales cátedra y comisión son gratis. Las entradas viejas del
     // historial no traen el flag: sin él se asume no anual, que es lo conservador.
     if (m.anual) continue;
@@ -106,6 +107,8 @@ export function seleccionUsesProFilters(
     profesores: string[] | null;
     sede?: string | null;
     comision_codigo?: string | null;
+    teorico_libre?: boolean;
+    seminario_libre?: boolean;
     anual?: boolean;
   }>,
   franjas: Array<unknown>,
@@ -124,6 +127,7 @@ export function seleccionUsesProFilters(
   for (const m of materias) {
     if (m.profesores !== null) return true;
     if (m.sede) return true;
+    if (m.teorico_libre || m.seminario_libre) return true;
     if (m.anual) continue;
     if (m.catedra_id !== null) return true;
     if (m.comision_codigo) return true;

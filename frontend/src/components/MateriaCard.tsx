@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ChevronDown,
+  ChevronUp,
   X,
   Loader2,
   Users,
@@ -11,6 +12,7 @@ import {
   Star,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import {
   Popover,
   PopoverContent,
@@ -22,6 +24,7 @@ import { StarRating } from "@/components/StarRating";
 import { api } from "@/lib/api";
 import { useSubscription } from "@/lib/useSubscription";
 import { useIsWide } from "@/lib/useIsWide";
+import { useClampRows } from "@/lib/useClampRows";
 import { usePaywall } from "@/lib/paywall";
 import { SEDES } from "@/lib/types";
 import type {
@@ -228,11 +231,51 @@ export function MateriaCard({ nombre, anual, seleccion, onChange, onRemove }: Pr
     (c) => c.id === seleccion.catedra_id
   );
 
+  // Los toggles de "coincide con el práctico" sólo tienen sentido donde hay
+  // obligación: sin ella el teórico ya es libre y el seminario es optativo.
+  // Con cátedra elegida manda la suya; si no, alcanza con que alguna la tenga.
+  const obligaTeorico = catedraSeleccionada
+    ? catedraSeleccionada.obliga_teorico === true
+    : catedrasVigentes.some((c) => c.obliga_teorico);
+  const obligaSeminario = catedraSeleccionada
+    ? catedraSeleccionada.obliga_seminario === true
+    : catedrasVigentes.some((c) => c.obliga_seminario);
+
+  // Cambiar de cátedra puede dejar un toggle prendido sin nada que desatar: así
+  // quedaría marcando el request como Pro sin cambiar ningún plan.
+  useEffect(() => {
+    if (!opciones) return;
+    const patch: Partial<MateriaSeleccionada> = {};
+    if (seleccion.teorico_libre && !obligaTeorico) patch.teorico_libre = false;
+    if (seleccion.seminario_libre && !obligaSeminario) {
+      patch.seminario_libre = false;
+    }
+    if (Object.keys(patch).length > 0) onChange({ ...seleccion, ...patch });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opciones, obligaTeorico, obligaSeminario]);
+
   // En materias anuales cátedra y comisión son gratis; el resto sigue Pro.
   const libre = isPaid || anual;
 
   // Materia agregada desde una URL o un historial viejos, ya discontinuada.
   const sinOferta = !!opciones && catedrasVigentes.length === 0;
+
+  // Desktop (≥lg) muestra la fila de selectores entera y difumina la de los
+  // toggles; abajo de eso, dos campos y el tercero cortado al medio.
+  const isLg = useIsWide(1024);
+  const {
+    containerRef,
+    expanded,
+    setExpanded,
+    collapsedHeight,
+    clamp,
+  } = useClampRows(isLg ? 1 : 2, [
+    opciones,
+    anual,
+    obligaTeorico,
+    obligaSeminario,
+    subLoading,
+  ]);
 
   return (
     <div className="rounded-xl border border-border bg-white p-4">
@@ -267,9 +310,15 @@ export function MateriaCard({ nombre, anual, seleccion, onChange, onRemove }: Pr
       )}
 
       {opciones && !sinOferta && (
+        <div className="mt-3">
+        {/* El relative envuelve sólo la grilla: el difuminado se ancla a su
+            borde inferior, no al del botón "Ver más". */}
+        <div className="relative">
         <div
+          ref={containerRef}
+          style={clamp ? { maxHeight: collapsedHeight! } : undefined}
           className={
-            "mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 " +
+            "grid grid-cols-1 gap-2 overflow-hidden sm:grid-cols-2 " +
             (anual ? "lg:grid-cols-4" : "lg:grid-cols-3")
           }
         >
@@ -347,6 +396,133 @@ export function MateriaCard({ nombre, anual, seleccion, onChange, onRemove }: Pr
               />
             )}
           </div>
+          {/* Los toggles van en su propia fila (col-span-full): media card cada
+              uno de sm para arriba —sin importar en cuántas columnas esté la
+              grilla de selectores, y con uno solo visible ocupa la mitad igual—
+              y apilados a ancho completo en mobile, como los selectores. */}
+          {(obligaTeorico || obligaSeminario) && (
+            <div className="col-span-full grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {obligaTeorico && (
+                <ToggleCoincide
+                  titulo="Teórico"
+                  label="Usar teórico obligatorio"
+                  loading={subLoading}
+                  checked={!seleccion.teorico_libre}
+                  onChange={(v) => onChange({ ...seleccion, teorico_libre: !v })}
+                  locked={!isPaid}
+                  onLockedClick={() => openPaywall("filtros")}
+                  lockedTitle="Hacete Pro para combinar la comisión con cualquier teórico"
+                />
+              )}
+              {obligaSeminario && (
+                <ToggleCoincide
+                  titulo="Seminario"
+                  label="Usar seminario obligatorio"
+                  loading={subLoading}
+                  checked={!seleccion.seminario_libre}
+                  onChange={(v) =>
+                    onChange({ ...seleccion, seminario_libre: !v })
+                  }
+                  locked={!isPaid}
+                  onLockedClick={() => openPaywall("filtros")}
+                  lockedTitle="Hacete Pro para combinar la comisión con cualquier seminario"
+                />
+              )}
+            </div>
+          )}
+        </div>
+        {clamp && (
+          <button
+            type="button"
+            aria-label="Ver todos los filtros"
+            onClick={() => setExpanded(true)}
+            className="absolute inset-x-0 bottom-0 h-12 cursor-pointer bg-gradient-to-t from-white to-transparent"
+          />
+        )}
+        </div>
+        {collapsedHeight != null && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="mt-2 flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+          >
+            {expanded ? (
+              <>
+                <ChevronUp className="size-3.5" />
+                Ver menos
+              </>
+            ) : (
+              <>
+                <ChevronDown className="size-3.5" />
+                Ver más
+              </>
+            )}
+          </button>
+        )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Toggle "usar el teórico/seminario obligatorio". Prendido (default) es el
+// comportamiento de siempre; apagado desata la comisión de su obligado.
+function ToggleCoincide({
+  titulo,
+  label,
+  checked,
+  onChange,
+  loading,
+  locked,
+  onLockedClick,
+  lockedTitle,
+}: {
+  titulo: string;
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  loading?: boolean;
+  locked?: boolean;
+  onLockedClick?: () => void;
+  lockedTitle?: string;
+}) {
+  return (
+    <div>
+      <p className="mb-1 text-xs font-medium text-muted-foreground">{titulo}</p>
+      {loading ? (
+        <Skeleton className="h-9 w-full rounded-lg" />
+      ) : (
+        // El overlay va como hermano y no envolviendo al Switch: un botón dentro
+        // de otro botón no es HTML válido.
+        <div className="relative">
+          <label
+            title={locked ? lockedTitle : undefined}
+            className={
+              "flex h-9 w-full items-center gap-2 rounded-lg border border-input px-3 text-xs font-medium transition-colors max-sm:min-h-[44px] " +
+              (locked
+                ? "bg-muted/40 text-muted-foreground"
+                : "cursor-pointer bg-white hover:bg-accent")
+            }
+          >
+            <Switch
+              checked={checked}
+              onCheckedChange={onChange}
+              disabled={locked}
+              className="shrink-0 scale-90"
+            />
+            <span className="flex-1 truncate">{label}</span>
+            {locked && (
+              <Gem className="size-3.5 shrink-0 text-[#EC990B]" />
+            )}
+          </label>
+          {locked && onLockedClick && (
+            <button
+              type="button"
+              onClick={onLockedClick}
+              aria-label="Hacete Pro para usar este filtro"
+              className="absolute inset-0 cursor-pointer rounded-lg"
+            />
+          )}
         </div>
       )}
     </div>
