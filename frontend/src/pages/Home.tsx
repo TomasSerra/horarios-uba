@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   Sparkles,
@@ -186,13 +186,19 @@ function PagoStatusDialog({
     },
   });
 
+  // Una vez por pago: el write al cache de /me re-renderiza al padre, y si el
+  // efecto se re-dispara y vuelve a escribir, el ciclo no corta (React error
+  // #185, "Maximum update depth exceeded").
+  const acreditadoRef = useRef<string | null>(null);
   useEffect(() => {
-    if (data?.status === "approved") {
+    if (data?.status !== "approved") return;
+    if (acreditadoRef.current !== externalReference) {
+      acreditadoRef.current = externalReference;
       markProActive(queryClient);
-      const t = setTimeout(onClose, 1500);
-      return () => clearTimeout(t);
     }
-  }, [data?.status, queryClient, onClose]);
+    const t = setTimeout(onClose, 1500);
+    return () => clearTimeout(t);
+  }, [data?.status, externalReference, queryClient, onClose]);
 
   const open = !!externalReference;
   const timedOut = Date.now() - startedAt > PAGO_MAX_WAIT_MS;
@@ -442,6 +448,10 @@ export function Home() {
   const navigate = useNavigate();
   const [pagoError, setPagoError] = useState<PagoErrorState | null>(null);
   const [pagoExternalRef, setPagoExternalRef] = useState<string | null>(null);
+  // Estables a propósito: PagoStatusDialog tiene onClose en las deps del efecto
+  // que acredita el pago, y una arrow inline lo re-dispararía en cada render.
+  const cerrarPagoError = useCallback(() => setPagoError(null), []);
+  const cerrarPagoStatus = useCallback(() => setPagoExternalRef(null), []);
   useEffect(() => {
     if (location.pathname === "/pago-error") {
       const params = new URLSearchParams(location.search);
@@ -1053,10 +1063,10 @@ export function Home() {
         description="Armá tu cuatrimestre en la Facultad de Psicología (UBA): combiná materias, cátedras y profesores sin superposiciones, filtrá por días, franjas y sedes, y generá todos los planes de cursada válidos."
         path="/"
       />
-      <PagoErrorDialog state={pagoError} onClose={() => setPagoError(null)} />
+      <PagoErrorDialog state={pagoError} onClose={cerrarPagoError} />
       <PagoStatusDialog
         externalReference={pagoExternalRef}
-        onClose={() => setPagoExternalRef(null)}
+        onClose={cerrarPagoStatus}
       />
       <Header />
 

@@ -35,10 +35,14 @@ export const meQueryKey = (uid: string | undefined) =>
 // leen useMe/useSubscription, y dispara un refetch para hidratar valid_until.
 // No necesita el uid: opera sobre cualquier query con prefijo "me".
 export function markProActive(queryClient: QueryClient): void {
+  // Si ya está en true no reescribimos: un objeto nuevo notifica a todos los
+  // observers de useMe/useSubscription y re-renderiza media app. Quien llama a
+  // esto lo hace desde un efecto de "pago acreditado", y un re-render que
+  // vuelva a disparar ese efecto cierra un loop de updates.
   queryClient.setQueriesData<Me | undefined>({ queryKey: ["me"] }, (old) =>
-    old
-      ? { ...old, subscription: { ...old.subscription, active: true } }
-      : old
+    !old || old.subscription?.active
+      ? old
+      : { ...old, subscription: { ...old.subscription, active: true } }
   );
   queryClient.invalidateQueries({ queryKey: ["me"] });
 }

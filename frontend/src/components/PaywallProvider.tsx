@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/useAuth";
@@ -170,6 +176,15 @@ function PaywallDialog({
     }
   }, [open]);
 
+  // Estables a propósito: PaymentMethodDialog tiene onPaid en las deps del
+  // efecto que acredita el pago, y una arrow inline lo re-dispararía en cada
+  // render.
+  const cerrarPago = useCallback(() => setShowPayment(false), []);
+  const handlePaid = useCallback(() => {
+    setShowPayment(false);
+    setTimeout(() => onOpenChange(false), 1500);
+  }, [onOpenChange]);
+
   async function handleHaceteProClick() {
     if (!isAuthenticated) {
       openLogin("signin");
@@ -280,11 +295,8 @@ function PaywallDialog({
 
       <PaymentMethodDialog
         open={open && showPayment}
-        onClose={() => setShowPayment(false)}
-        onPaid={() => {
-          setShowPayment(false);
-          setTimeout(() => onOpenChange(false), 1500);
-        }}
+        onClose={cerrarPago}
+        onPaid={handlePaid}
       />
     </>
   );
@@ -659,12 +671,19 @@ function PaymentMethodDialog({
       q.state.data?.status === "approved" ? false : 5000,
   });
 
+  // Misma guarda que en PagoStatusDialog (Home.tsx): una vez por pago, porque
+  // el write al cache de /me re-renderiza al padre y sin esto el efecto se
+  // re-dispararía en loop.
+  const acreditadoRef = useRef<string | null>(null);
   useEffect(() => {
     if (qrPagoStatus?.status !== "approved") return;
-    markProActive(queryClient);
+    if (acreditadoRef.current !== qrExternalReference) {
+      acreditadoRef.current = qrExternalReference;
+      markProActive(queryClient);
+    }
     const t = setTimeout(onPaid, 1500);
     return () => clearTimeout(t);
-  }, [qrPagoStatus?.status, queryClient, onPaid]);
+  }, [qrPagoStatus?.status, qrExternalReference, queryClient, onPaid]);
 
   // Si el user va a MP y vuelve sin pagar, el botón puede quedar en loading.
   // visibilitychange + timeout de seguridad resetean cuando la tab vuelve.
@@ -809,7 +828,13 @@ function PaymentMethodDialog({
 
 export function PaywallProvider({ children }: { children: ReactNode }) {
   const [reason, setReason] = useState<PaywallReason | null>(null);
-  const open = (r: PaywallReason = "general") => setReason(r);
+  const open = useCallback(
+    (r: PaywallReason = "general") => setReason(r),
+    [],
+  );
+  const handleOpenChange = useCallback((v: boolean) => {
+    if (!v) setReason(null);
+  }, []);
 
   return (
     <PaywallContext.Provider value={open}>
@@ -817,7 +842,7 @@ export function PaywallProvider({ children }: { children: ReactNode }) {
       <PaywallDialog
         open={reason !== null}
         reason={reason}
-        onOpenChange={(v) => !v && setReason(null)}
+        onOpenChange={handleOpenChange}
       />
     </PaywallContext.Provider>
   );
