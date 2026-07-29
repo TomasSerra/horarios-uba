@@ -164,6 +164,10 @@ export interface Favorite {
   id: number;
   plan: Plan;
   filters: FavoriteFilters | null;
+  // Nullables: los favoritos guardados antes del modal de nombre no tienen
+  // ninguno de los dos. La card los muestra como "Sin nombre".
+  nombre: string | null;
+  descripcion: string | null;
   created_at: string;
 }
 

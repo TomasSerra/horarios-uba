@@ -237,10 +237,30 @@ export const api = {
     request<PagoStatus>(`/pagos/${externalReference}/status`),
   listFavoritos: (token: string) =>
     request<{ favorites: Favorite[] }>("/favoritos", undefined, token),
-  addFavorito: (plan: Plan, filters: FavoriteFilters | null, token: string) =>
+  addFavorito: (
+    plan: Plan,
+    filters: FavoriteFilters | null,
+    nombre: string,
+    descripcion: string | null,
+    token: string
+  ) =>
     request<{ id: number; created_at: string }>(
       "/favoritos",
-      { method: "POST", body: JSON.stringify({ plan, filters }) },
+      {
+        method: "POST",
+        body: JSON.stringify({ plan, filters, nombre, descripcion }),
+      },
+      token
+    ),
+  updateFavorito: (
+    id: number,
+    nombre: string,
+    descripcion: string | null,
+    token: string
+  ) =>
+    request<{ nombre: string; descripcion: string | null }>(
+      `/favoritos/${id}`,
+      { method: "PATCH", body: JSON.stringify({ nombre, descripcion }) },
       token
     ),
   deleteFavorito: (id: number, token: string) =>

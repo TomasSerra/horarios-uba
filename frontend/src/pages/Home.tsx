@@ -27,6 +27,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { CarreraSelector } from "@/components/CarreraSelector";
+import { FavoritoFormDialog } from "@/components/FavoritoFormDialog";
 import { MateriaSelector } from "@/components/MateriaSelector";
 import { ErrorState } from "@/components/ErrorState";
 import { RestriccionesPanel } from "@/components/RestriccionesPanel";
@@ -260,6 +261,7 @@ function SaveFavoriteButton({
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [savedId, setSavedId] = useState<number | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
 
   // Plan distinto = botón vuelve a estado inicial.
   const planKey = useMemo(
@@ -287,24 +289,46 @@ function SaveFavoriteButton({
     );
   }
 
-  async function toggle() {
+  // Guardar pide nombre y descripción en un modal; quitar sigue siendo directo.
+  async function quitar() {
+    if (savedId === null) return;
     setBusy(true);
     try {
       const token = await getAccessTokenSilently();
-      if (isSaved && savedId !== null) {
-        await api.deleteFavorito(savedId, token);
-        setSavedId(null);
-        setKeyAtSave(null);
-      } else {
-        const { id } = await api.addFavorito(plan, filters, token);
-        setSavedId(id);
-        setKeyAtSave(planKey);
-      }
+      await api.deleteFavorito(savedId, token);
+      setSavedId(null);
+      setKeyAtSave(null);
       queryClient.invalidateQueries({ queryKey: ["favoritos"] });
     } catch (e) {
       showAlert({
         variant: "error",
-        title: isSaved ? "No se pudo eliminar" : "No se pudo guardar",
+        title: "No se pudo eliminar",
+        message: (e as Error).message,
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function guardar(nombre: string, descripcion: string | null) {
+    setBusy(true);
+    try {
+      const token = await getAccessTokenSilently();
+      const { id } = await api.addFavorito(
+        plan,
+        filters,
+        nombre,
+        descripcion,
+        token,
+      );
+      setSavedId(id);
+      setKeyAtSave(planKey);
+      setDialogOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["favoritos"] });
+    } catch (e) {
+      showAlert({
+        variant: "error",
+        title: "No se pudo guardar",
         message: (e as Error).message,
       });
     } finally {
@@ -313,24 +337,33 @@ function SaveFavoriteButton({
   }
 
   return (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={toggle}
-      disabled={busy}
-      className={
-        isSaved
-          ? "border-red-500 bg-red-500 text-white hover:bg-red-500/90 hover:text-white"
-          : ""
-      }
-    >
-      {busy ? (
-        <Loader2 className="size-4 animate-spin" />
-      ) : (
-        <Heart className={"size-4 " + (isSaved ? "fill-current" : "")} />
-      )}
-      {isSaved ? "Guardado" : "Guardar"}
-    </Button>
+    <>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => (isSaved ? quitar() : setDialogOpen(true))}
+        disabled={busy}
+        className={
+          isSaved
+            ? "border-red-500 bg-red-500 text-white hover:bg-red-500/90 hover:text-white"
+            : ""
+        }
+      >
+        {busy ? (
+          <Loader2 className="size-4 animate-spin" />
+        ) : (
+          <Heart className={"size-4 " + (isSaved ? "fill-current" : "")} />
+        )}
+        {isSaved ? "Guardado" : "Guardar"}
+      </Button>
+      <FavoritoFormDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        mode="guardar"
+        saving={busy}
+        onSubmit={guardar}
+      />
+    </>
   );
 }
 

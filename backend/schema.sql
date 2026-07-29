@@ -164,6 +164,11 @@ CREATE TABLE IF NOT EXISTS favorite_plans (
     -- materia) que el usuario tenía al guardar. Se muestran en la card de la
     -- página de favoritos.
     filters_data    JSONB,
+    -- Nullables aunque el nombre sea obligatorio al guardar: los favoritos
+    -- creados antes de que existiera el modal de guardado no tienen ninguno de
+    -- los dos, y el FE los muestra como "Sin nombre" (editable).
+    nombre          TEXT,
+    descripcion     TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

@@ -51,27 +51,65 @@ interface Props {
   plan: Plan | null;
   compacto?: boolean;
   showLeyenda?: boolean;
+  // Las vacantes viajan dentro del plan, así que en un plan guardado son las
+  // del momento en que se guardó. Apagarlo evita mostrar cupos vencidos.
+  showCupos?: boolean;
   // Franjas con las que se generó el plan, para pintarlas como bloqueadas.
   franjasBloqueadas?: FranjaExcluida[];
 }
 
-export function PlanLeyenda({ plan }: { plan: Plan }) {
+export function PlanLeyenda({
+  plan,
+  showCatedra = true,
+  size = "normal",
+}: {
+  plan: Plan;
+  showCatedra?: boolean;
+  size?: "normal" | "compacto";
+}) {
+  const compacto = size === "compacto";
   return (
-    <div className="flex flex-wrap gap-2 wide:gap-3">
+    <div
+      className={cn(
+        "flex flex-wrap",
+        compacto ? "gap-1.5" : "gap-2 wide:gap-3",
+      )}
+    >
       {plan.opciones.map((op, idx) => {
         const palette = PALETTE[idx % PALETTE.length];
         return (
           <div
             key={op.materia_codigo}
-            className="flex items-start gap-2 rounded-lg border border-border bg-background px-3 py-1.5 text-xs"
+            className={cn(
+              "flex items-start gap-2 rounded-lg border border-border bg-background",
+              compacto ? "px-2 py-1 text-[11px]" : "px-3 py-1.5 text-xs",
+            )}
           >
-            <span className={`mt-0.5 size-3 shrink-0 rounded-full ${palette.bg}`} />
+            <div className="flex flex-col items-center justify-center h-full">
+              <span
+                className={cn(
+                  "shrink-0 rounded-full",
+                  compacto ? "size-2" : "size-3",
+                  palette.bg,
+                )}
+              />
+            </div>
+
             <div className="flex flex-col">
-              <span className="font-medium">{op.materia_nombre}</span>
-              <span className="text-muted-foreground">
-                cát {op.catedra_id}
-                {op.catedra_titular ? ` (${op.catedra_titular})` : ""}
+              <span
+                className={cn(
+                  "font-medium",
+                  compacto ? "line-clamp-1" : "line-clamp-2",
+                )}
+              >
+                {op.materia_nombre}
               </span>
+              {showCatedra && (
+                <span className="text-muted-foreground">
+                  cát {op.catedra_id}
+                  {op.catedra_titular ? ` (${op.catedra_titular})` : ""}
+                </span>
+              )}
             </div>
           </div>
         );
@@ -253,8 +291,8 @@ function CursoDetalle({
       <div className={textCls}>
         <Clock className={cn("shrink-0", iconSize)} />
         <span>
-          {formatTipo(curso.tipo, curso.codigo)} ·{" "}
-          {formatHM(curso.hora_inicio)}–{formatHM(curso.hora_fin)}
+          {formatTipo(curso.tipo, curso.codigo)} · {formatHM(curso.hora_inicio)}
+          –{formatHM(curso.hora_fin)}
         </span>
       </div>
       {curso.aula && (
@@ -323,7 +361,7 @@ function CursoBloque({ curso, compacto, top, height }: CursoBloqueProps) {
         compacto
           ? "flex items-center px-1.5 py-0 text-[10px]"
           : "px-2 py-1.5 text-[11px]",
-        curso.materia_color
+        curso.materia_color,
       )}
       style={{ top, height }}
       onMouseEnter={isTouch ? undefined : onEnter}
@@ -334,7 +372,7 @@ function CursoBloque({ curso, compacto, top, height }: CursoBloqueProps) {
           aria-label="Sin cupos disponibles"
           className={cn(
             "absolute right-1 top-1 fill-amber-400 text-amber-900 drop-shadow",
-            compacto ? "size-3" : "size-3.5"
+            compacto ? "size-3" : "size-3.5",
           )}
           strokeWidth={2.5}
         />
@@ -349,8 +387,8 @@ function CursoBloque({ curso, compacto, top, height }: CursoBloqueProps) {
             {curso.materia_nombre}
           </div>
           <div className="opacity-90 leading-tight">
-            {formatTipo(curso.tipo, curso.codigo)} · {formatHM(curso.hora_inicio)}–
-            {formatHM(curso.hora_fin)}
+            {formatTipo(curso.tipo, curso.codigo)} ·{" "}
+            {formatHM(curso.hora_inicio)}–{formatHM(curso.hora_fin)}
           </div>
           {curso.aula && (
             <div className="opacity-80 leading-tight">{curso.aula}</div>
@@ -398,6 +436,7 @@ export function CalendarioPlan({
   plan,
   compacto = false,
   showLeyenda = true,
+  showCupos = true,
   franjasBloqueadas,
 }: Props) {
   const horaMin = 7;
@@ -413,8 +452,11 @@ export function CalendarioPlan({
       // Solo la comisión tiene `vacantes` cargado: teóricos/seminarios
       // comparten el cupo de la comisión via comision_obliga.
       const comision = op.cursos.find((c) => c.tipo === "comision");
-      const cuposRestantes = comision?.vacantes ?? null;
+      // Se corta acá y no en cada render: con ambos en neutro se apagan solos
+      // el contador, el cartel de "sin cupos" y el ícono sobre el bloque.
+      const cuposRestantes = showCupos ? (comision?.vacantes ?? null) : null;
       const sinCupos =
+        showCupos &&
         comision != null &&
         (comision.vacantes == null || comision.vacantes <= 0);
       op.cursos.forEach((c) => {
@@ -430,7 +472,7 @@ export function CalendarioPlan({
       });
     });
     return cs;
-  }, [plan]);
+  }, [plan, showCupos]);
 
   const bloqueos = useMemo(
     () => bloqueosPorDia(franjasBloqueadas ?? [], horaMin, horaMax),
@@ -453,7 +495,7 @@ export function CalendarioPlan({
 
   const horas = Array.from(
     { length: horaMax - horaMin },
-    (_, i) => horaMin + i
+    (_, i) => horaMin + i,
   );
 
   // Agrupar por día
@@ -474,102 +516,102 @@ export function CalendarioPlan({
     <div>
       <div className="-mx-6 overflow-x-auto overflow-y-clip px-6 wide:mx-0 wide:px-0">
         <div className="min-w-[560px] rounded-2xl border border-border bg-card wide:min-w-[760px]">
-        <div className={cn("grid border-b border-border", gridCols)}>
-          <div className="p-3 text-xs font-medium text-muted-foreground" />
-          {DIAS_DISPLAY.map((d) => (
-            <div
-              key={d.key}
-              className="p-3 text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-            >
-              {d.short}
-            </div>
-          ))}
-        </div>
-
-        <div className={cn("grid", gridCols)}>
-          {/* Columna de horas */}
-          <div
-            className="relative border-r border-border"
-            style={{ height: PIXELS_PER_HOUR * horas.length }}
-          >
-            {compacto
-              ? horas.map((h, i) => (
-                  <div
-                    key={h}
-                    className="absolute inset-x-0 flex items-center justify-end pr-1.5 text-[9px] font-medium leading-none text-muted-foreground"
-                    style={{
-                      top: i * PIXELS_PER_HOUR,
-                      height: PIXELS_PER_HOUR,
-                    }}
-                  >
-                    {String(h).padStart(2, "0")}:00 -{" "}
-                    {String(h + 1).padStart(2, "0")}:00
-                  </div>
-                ))
-              : Array.from(
-                  { length: horaMax - horaMin + 1 },
-                  (_, i) => horaMin + i
-                ).map((h, i) => (
-                  <div
-                    key={h}
-                    className="absolute right-0 flex -translate-y-1/2 justify-end pr-1 text-[10px] font-medium text-muted-foreground wide:pr-2"
-                    style={{ top: i * PIXELS_PER_HOUR }}
-                  >
-                    {String(h).padStart(2, "0")}:00
-                  </div>
-                ))}
-          </div>
-
-          {DIAS_DISPLAY.map((d) => {
-            const cs = cursosPorDia.get(d.key)!;
-            return (
+          <div className={cn("grid border-b border-border", gridCols)}>
+            <div className="p-3 text-xs font-medium text-muted-foreground" />
+            {DIAS_DISPLAY.map((d) => (
               <div
                 key={d.key}
-                className="relative border-r border-border last:border-r-0"
-                style={{ height: PIXELS_PER_HOUR * horas.length }}
+                className="p-3 text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground"
               >
-                {/* Líneas de hora */}
-                {horas.map((h, i) => (
-                  <div
-                    key={h}
-                    className="absolute inset-x-0 border-b border-border/50"
-                    style={{ top: i * PIXELS_PER_HOUR }}
-                  />
-                ))}
-                {/* Franjas bloqueadas por el filtro */}
-                {(bloqueos.get(d.key) ?? []).map((b) => (
-                  <FranjaBloqueadaBloque
-                    key={`${b.inicio}-${b.fin}`}
-                    bloqueo={b}
-                    compacto={compacto}
-                    top={(b.inicio - horaMin) * PIXELS_PER_HOUR}
-                    height={(b.fin - b.inicio) * PIXELS_PER_HOUR}
-                  />
-                ))}
-                {/* Bloques de cursos */}
-                {cs.map((c) => {
-                  const start = parseTime(c.hora_inicio);
-                  const end = parseTime(c.hora_fin);
-                  if (start === null || end === null) return null;
-                  const top = (start - horaMin) * PIXELS_PER_HOUR;
-                  const height = Math.max(
-                    minBloque,
-                    (end - start) * PIXELS_PER_HOUR
-                  );
-                  return (
-                    <CursoBloque
-                      key={c.id}
-                      curso={c}
-                      compacto={compacto}
-                      top={top}
-                      height={height}
-                    />
-                  );
-                })}
+                {d.short}
               </div>
-            );
-          })}
-        </div>
+            ))}
+          </div>
+
+          <div className={cn("grid", gridCols)}>
+            {/* Columna de horas */}
+            <div
+              className="relative border-r border-border"
+              style={{ height: PIXELS_PER_HOUR * horas.length }}
+            >
+              {compacto
+                ? horas.map((h, i) => (
+                    <div
+                      key={h}
+                      className="absolute inset-x-0 flex items-center justify-end pr-1.5 text-[9px] font-medium leading-none text-muted-foreground"
+                      style={{
+                        top: i * PIXELS_PER_HOUR,
+                        height: PIXELS_PER_HOUR,
+                      }}
+                    >
+                      {String(h).padStart(2, "0")}:00 -{" "}
+                      {String(h + 1).padStart(2, "0")}:00
+                    </div>
+                  ))
+                : Array.from(
+                    { length: horaMax - horaMin + 1 },
+                    (_, i) => horaMin + i,
+                  ).map((h, i) => (
+                    <div
+                      key={h}
+                      className="absolute right-0 flex -translate-y-1/2 justify-end pr-1 text-[10px] font-medium text-muted-foreground wide:pr-2"
+                      style={{ top: i * PIXELS_PER_HOUR }}
+                    >
+                      {String(h).padStart(2, "0")}:00
+                    </div>
+                  ))}
+            </div>
+
+            {DIAS_DISPLAY.map((d) => {
+              const cs = cursosPorDia.get(d.key)!;
+              return (
+                <div
+                  key={d.key}
+                  className="relative border-r border-border last:border-r-0"
+                  style={{ height: PIXELS_PER_HOUR * horas.length }}
+                >
+                  {/* Líneas de hora */}
+                  {horas.map((h, i) => (
+                    <div
+                      key={h}
+                      className="absolute inset-x-0 border-b border-border/50"
+                      style={{ top: i * PIXELS_PER_HOUR }}
+                    />
+                  ))}
+                  {/* Franjas bloqueadas por el filtro */}
+                  {(bloqueos.get(d.key) ?? []).map((b) => (
+                    <FranjaBloqueadaBloque
+                      key={`${b.inicio}-${b.fin}`}
+                      bloqueo={b}
+                      compacto={compacto}
+                      top={(b.inicio - horaMin) * PIXELS_PER_HOUR}
+                      height={(b.fin - b.inicio) * PIXELS_PER_HOUR}
+                    />
+                  ))}
+                  {/* Bloques de cursos */}
+                  {cs.map((c) => {
+                    const start = parseTime(c.hora_inicio);
+                    const end = parseTime(c.hora_fin);
+                    if (start === null || end === null) return null;
+                    const top = (start - horaMin) * PIXELS_PER_HOUR;
+                    const height = Math.max(
+                      minBloque,
+                      (end - start) * PIXELS_PER_HOUR,
+                    );
+                    return (
+                      <CursoBloque
+                        key={c.id}
+                        curso={c}
+                        compacto={compacto}
+                        top={top}
+                        height={height}
+                      />
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
 
