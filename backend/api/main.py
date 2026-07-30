@@ -232,11 +232,20 @@ async def report_client_error(report: ClientErrorReport, request: Request):
 
 
 # Datos servidos por el scraper diario (06:00 UTC), estables durante el día.
-# Fresco 20 min y hasta 40 min más sirviendo stale mientras revalida en
-# background: ventana total de 1 hora. Antes era 1h + 24h, pero ese colchón
-# largo hace que un cambio de shape del payload (agregar un campo que el FE
-# necesita) quede invisible por un día entero después del deploy.
-_STATIC_CACHE = "public, max-age=1200, stale-while-revalidate=2400"
+# Fresco 2h y hasta 2h más sirviendo stale mientras revalida en background:
+# ventana total de 4 horas.
+#
+# Los cupos NO viajan por acá: `/materias/{cod}/opciones` no devuelve `vacantes`
+# (ver `ComisionOpcion` en models.py), y el único consumidor que los muestra los
+# lee de `POST /planes`, que no se cachea. O sea que alargar esta ventana no
+# atrasa los cupos y sí ahorra wake-ups de Neon, que en el plan Free se pagan con
+# un piso de 5 min de compute cada uno.
+#
+# El riesgo de la ventana larga es que un cambio de shape del payload (agregar un
+# campo que el FE da por hecho) quede invisible después del deploy. El escape
+# hatch es bumpear `DATA_VERSION` en frontend/src/lib/api.ts, que le mete `?v=` a
+# los tres endpoints cacheados que el FE consume.
+_STATIC_CACHE = "public, max-age=7200, stale-while-revalidate=7200"
 
 
 def _set_static_cache(response: Response) -> None:
