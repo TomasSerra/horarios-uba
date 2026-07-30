@@ -1,4 +1,4 @@
-.PHONY: up down restart logs ps psql scrape reset test install-test-deps install-hooks help
+.PHONY: up down restart logs ps psql scrape vacantes vacantes-dry reset test install-test-deps install-hooks help
 
 DC := docker compose
 VENV := backend/.venv
@@ -42,6 +42,15 @@ psql:
 scrape:
 	$(DC) run --rm scraper
 
+# Job horario que sólo actualiza cursos.vacantes. `vacantes-dry` no escribe nada
+# (la transacción se abre READ ONLY), así que es seguro incluso contra prod.
+# Flags extra por ARGS:  make vacantes-dry ARGS="--limit 5"
+vacantes-dry:
+	$(DC) run --rm scraper python -m scraper.vacantes --dry-run $(ARGS)
+
+vacantes:
+	$(DC) run --rm scraper python -m scraper.vacantes $(ARGS)
+
 reset:
 	$(DC) down -v
 	$(MAKE) up
@@ -77,7 +86,9 @@ help:
 	@echo "  make down               - Apaga containers (preserva datos)"
 	@echo "  make restart            - down + up"
 	@echo "  make reset              - Borra datos y vuelve a levantar desde cero"
-	@echo "  make scrape             - Re-corre el scraper (idempotente)"
+	@echo "  make scrape             - Re-corre el scraper completo (idempotente)"
+	@echo "  make vacantes-dry       - Diff de cupos sin escribir (READ ONLY, seguro contra prod)"
+	@echo "  make vacantes           - Actualiza sólo cursos.vacantes"
 	@echo "  make psql               - Abre psql contra la DB"
 	@echo "  make logs               - Sigue logs de API + Frontend"
 	@echo "  make ps                 - Lista containers"

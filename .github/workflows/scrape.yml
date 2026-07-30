@@ -8,9 +8,17 @@ on:
     # - cron: '0 6,14,22 * * *'
   workflow_dispatch:
 
+# Compartido con vacantes.yml para que las dos corridas no se pisen. Sin
+# `timeout-minutes` una corrida patológica (219 páginas × 3 retries de 20s)
+# podría bloquear el group horas.
+concurrency:
+  group: planify-scraper-db
+  cancel-in-progress: false
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
