@@ -5,14 +5,20 @@ name: vacantes
 # profesores, comisiones y vigencia.
 
 on:
-  # Cada hora en horario de vigilia: 07:20–23:20 ART (UTC-3), 17 corridas/día.
+  # Cada 30 min en horario de vigilia: 07:20–23:50 ART (UTC-3), 34 slots/día.
   # De madrugada nadie se inscribe y las corridas contra una DB ociosa pagan el
   # wake completo de Neon (piso de 5 min por scale-to-zero).
   #
+  # Los minutos :20 y :50 son a propósito: el cron de Actions es best-effort y
+  # los slots en :00 y :30 son los que más se demoran o se descartan por carga.
+  # Aun así se pierden varios — el 30/07 llegó 1 de 4 slots y el scraper diario
+  # llegó 2h tarde. Duplicar los slots es una mitigación, no un arreglo: lo único
+  # que dispara en el momento es `workflow_dispatch` (7 de 7 ese día).
+  #
   # No incluye las 06:00 UTC del scraper diario, así que los dos jobs no pueden
-  # solaparse ni con la deriva típica del cron de Actions.
+  # solaparse ni con la deriva típica del cron.
   schedule:
-    - cron: '20 10-23,0-2 * * *'
+    - cron: '20,50 10-23,0-2 * * *'
   workflow_dispatch:
     inputs:
       dry_run:

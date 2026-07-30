@@ -146,7 +146,9 @@ Lo consume `solo_con_cupos` en [api/planes.py](api/planes.py): sobre una materia
 
 ## Job de vacantes (cupos casi en vivo)
 
-`scraper/vacantes.py` corre **cada hora en horario de vigilia** (07:20–23:20 ART, cron `20 10-23,0-2` UTC en [.github/workflows/vacantes.yml](../.github/workflows/vacantes.yml)) y actualiza **una sola columna**: `cursos.vacantes`. El scraper diario sigue siendo el dueño de todo lo demás.
+`scraper/vacantes.py` corre **cada 30 min en horario de vigilia** (07:20–23:50 ART, cron `20,50 10-23,0-2` UTC en [.github/workflows/vacantes.yml](../.github/workflows/vacantes.yml)) y actualiza **una sola columna**: `cursos.vacantes`. El scraper diario sigue siendo el dueño de todo lo demás.
+
+**Los slots del cron no son garantía.** El `schedule` de Actions es best-effort: el 30/07/2026 llegó 1 de 4 slots del job y el cron del scraper diario (sin tocar hacía meses) llegó 2h tarde. Los `workflow_dispatch` del mismo día salieron 7 de 7 al instante. Por eso los slots están en :20 y :50 (no en :00/:30, que son los peores) y son el doble de los necesarios. Si hiciera falta frescura garantizada, la salida es un scheduler externo que dispare `workflow_dispatch` vía API, que no pasa por la cola demorada.
 
 Existe separado porque subirle la frecuencia a `scraper.main` no es viable: `replace_cursos` borra y re-inserta todos los cursos de cada cátedra (100% de turnover de `cursos` y `comision_obliga` por corrida) y puede disparar el sweep de vigencia. Nada de eso es aceptable 17 veces por día en Neon Free.
 
