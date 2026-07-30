@@ -324,6 +324,83 @@ def make_parte_row(
     }
 
 
+# Celdas de cada fila: codigo, dia, inicio, fin, tipo, profesor, vac, oblig,
+# aula, observ. Una fila con codigo="" es una continuación (parte) de la anterior.
+# `headers` se puede pisar para simular un corrimiento de columnas de la fuente.
+HEADERS_CATEDRA = (
+    "Dia", "Inicio", "Fin", "Tipo", "Profesor", "Vac.", "Oblig.", "Aula", "Observ.",
+)
+
+
+def make_pagina_catedra(
+    comisiones=(),
+    teoricos=(),
+    catedra_id=574,
+    materia_codigo=10359,
+    cuatrimestre="2025/1",
+    headers=HEADERS_CATEDRA,
+    con_header=True,
+):
+    """HTML de una página de detalle de cátedra, como la sirve la fuente.
+
+    `con_header=False` simula una página de error / WAF: 200 sin el `td.option1`
+    del que sale el header, que es lo que hace que `parse_catedra_page` devuelva
+    None.
+    """
+
+    def tabla(titulo, filas):
+        if not filas:
+            return ""
+        ths = "".join(f"<th>{h}</th>" for h in headers)
+        cuerpo = "".join(
+            "<tr>" + "".join(f"<td>{c}</td>" for c in fila) + "</tr>" for fila in filas
+        )
+        return (
+            f'<table class="table_tabs"><tr><th>{titulo}</th>{ths}</tr>'
+            f"{cuerpo}</table>"
+        )
+
+    header = (
+        f'<td class="option1">'
+        f"{cuatrimestre} * Listado horarios de cátedra {catedra_id} - 1 - Titular X * "
+        f"Materia ( {materia_codigo} - Materia X )"
+        "</td>"
+        if con_header
+        else ""
+    )
+    return (
+        "<html><body>"
+        + header
+        + tabla("Teóricos", teoricos)
+        + tabla("Comisiones", comisiones)
+        + "</body></html>"
+    )
+
+
+def make_fila_comision(codigo="01", vacantes="30", profesor="Prof X", oblig="I"):
+    """Fila de comisión con los 10 campos en el orden de la fuente."""
+    return [
+        codigo, "lunes", "09:15", "10:45", "Prac", profesor,
+        vacantes, oblig, "HY-024", "TALLER",
+    ]
+
+
+def make_fila_db(
+    catedra_id=574,
+    codigo="01",
+    vacantes=30,
+    vigente=True,
+    cuatrimestre="2025/1",
+    congelada=False,
+):
+    """Fila como la devuelve SELECT_ESTADO de scraper/vacantes.py.
+
+    Tupla, no dict: `scraper/db.get_conn()` no usa dict_row (a diferencia del
+    pool del API), así que las filas del scraper vienen posicionales.
+    """
+    return (catedra_id, codigo, vacantes, vigente, cuatrimestre, congelada)
+
+
 def setup_planes_db(
     fake_conn,
     comision_rows,

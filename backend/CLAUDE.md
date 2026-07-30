@@ -22,6 +22,8 @@ backend/
     parse.py      parsing HTML del sistema académico
     db.py         inserts idempotentes
     vigencia.py   guardas del sweep (lógica pura)
+    vacantes.py         job horario que actualiza SOLO cursos.vacantes
+    vacantes_guardas.py circuit breakers de ese job (lógica pura)
     http.py       cliente con retries/delay
     config.py
   schema.sql      DDL ejecutado al crear la DB
@@ -141,6 +143,41 @@ Hay materias que se cursan todo el año (`materias.anual`) pero que la fuente s�
 **No hay noción de fechas ni de "cuatrimestre actual" en el código a propósito**: el calendario de la facultad se mueve todos los años, y el índice de la fuente ya es la señal exacta. Separación de responsabilidades: `anual` es **configuración** (la escribe `MATERIAS_ANUALES`), `oferta_congelada` es **estado observado** (lo escribe el scraper).
 
 Lo consume `solo_con_cupos` en [api/planes.py](api/planes.py): sobre una materia congelada el filtro no aplica, porque sus `vacantes` son del cuatrimestre pasado y dejarían afuera a quien ya la está cursando. En el 1er cuatrimestre la misma materia filtra normal. `_materias_con_oferta_congelada` sólo se consulta cuando el request trae `solo_con_cupos`.
+
+## Job de vacantes (cupos casi en vivo)
+
+`scraper/vacantes.py` corre **cada hora en horario de vigilia** (07:20–23:20 ART, cron `20 10-23,0-2` UTC en [.github/workflows/vacantes.yml](../.github/workflows/vacantes.yml)) y actualiza **una sola columna**: `cursos.vacantes`. El scraper diario sigue siendo el dueño de todo lo demás.
+
+Existe separado porque subirle la frecuencia a `scraper.main` no es viable: `replace_cursos` borra y re-inserta todos los cursos de cada cátedra (100% de turnover de `cursos` y `comision_obliga` por corrida) y puede disparar el sweep de vigencia. Nada de eso es aceptable 17 veces por día en Neon Free.
+
+**Invariante**: se escribe sólo sobre la intersección (fuente ∩ DB) y sólo valores `int` efectivamente vistos. Nunca `NULL`, nunca `0` por ausencia, nunca un `DELETE`/`INSERT`, nunca otra columna. Todo modo de falla degrada a "las vacantes quedan stale", que es el status quo entre corridas diarias.
+
+Flujo: se fetchean todas las páginas de cátedra **sin abrir la DB**; recién al final una conexión y una transacción (SELECT → diff en Python → guardas → un `UPDATE` batcheado con `unnest` → assert de `rowcount`). Medido con el índice completo (197 cátedras, 2.050 comisiones): 122s de fetch y **menos de 0,1s de DB**. Batchear es sobre todo por seguridad: los breakers se evalúan antes del write y la ventana de locks es de milisegundos.
+
+| Detalle | Por qué |
+| --- | --- |
+| Clave `(catedra_id, codigo)` con `tipo='comision' AND parte_de_id IS NULL` | **Nunca `cursos.id`**: el scraper diario reasigna los BIGSERIAL. La clave es única en ese subconjunto (las 4 colisiones de la tabla son `teorico`). |
+| `parte_de_id IS NULL` en el `WHERE` | Load-bearing: las partes comparten el `codigo` del padre, y sin la guarda el cupo se copiaría a las ~521 partes, rompiendo el invariante de [Comisiones partidas](#comisiones-partidas). |
+| Match de `cuatrimestre` página vs `catedras.cuatrimestre` | En el flip de cuatrimestre la misma clave apunta a otra comisión. Mismatch → se saltea la cátedra entera. |
+| Validación de headers de la tabla Comisiones | `parse._parse_rows` lee `cells[6]` posicionalmente y sin validar: si la fuente inserta una columna, sigue devolviendo números plausibles de otra celda. Es el detector primario de ese caso. |
+| `claves_db` acotado a las cátedras leídas con éxito | Los ratios de cobertura miden lo que tienen que medir, y `--limit` funciona sin caso especial. |
+| Materias con `oferta_congelada` **no** se excluyen | Son las dos anuales más grandes; excluirlas las dejaría stale toda la semana. El match de cuatrimestre ya cubre el caso peligroso. |
+
+Los circuit breakers viven en `scraper/vacantes_guardas.py` (lógica pura, mismo criterio que `vigencia.py`), overrideables por env `VACANTES_*`. Abortan **antes** de abrir la conexión cuando pueden. El más valioso es `cambios > 60% de matched`: en inscripciones el cambio hora a hora son decenas de ~2.050, así que una mayoría de cambios es la firma de un parse que leyó otra columna. Tiene piso de muestra (`MIN_MUESTRA_PARA_RATIO = 50`) para que las corridas con `--limit` no aborten siempre. Todo abort es `exit 1`: el mail de "workflow failed" de GitHub es el monitoreo.
+
+El techo de `vacantes` es 1500 y no es arbitrario: las comisiones asincrónicas por campus virtual son legítimamente enormes (Idioma Inglés Módulo II, cátedra 854, tiene 850). Un techo apretado las descartaría en silencio; 1500 deja margen y sigue rechazando un año ("2025") leído desde otra columna.
+
+`--dry-run` fetchea todo y calcula el diff, pero abre la transacción con `conn.read_only = True` (psycopg emite `BEGIN READ ONLY`), así que **el server rechaza cualquier escritura**. Es lo que lo hace seguro contra producción. `make vacantes-dry ARGS="--limit 5"` local.
+
+Los dos workflows comparten `concurrency: planify-scraper-db` (en Actions el group es global al repo). El cron ya evita el solape — la corrida diaria es a las 06:00 UTC y no está en el set horario —, así que el group cubre sólo los `workflow_dispatch` manuales.
+
+**Rollback**, en orden:
+
+1. **Deshabilitar el workflow** desde la UI de Actions (instantáneo, sin commit). Es el kill switch.
+2. **Disparar `scrape.yml` a mano.** Re-scrapea todo desde la fuente y reescribe `vacantes` con valores frescos en ~5 min. Es el rollback natural y el mejor: deja la columna correcta, no vieja.
+3. Sólo si la fuente **misma** está sirviendo datos malos (re-scrapear reproduciría el problema), restaurar de un backup de la columna: `\copy (SELECT id, catedra_id, tipo, codigo, vacantes FROM cursos WHERE tipo='comision' AND parte_de_id IS NULL) TO 'vacantes-backup.csv' CSV HEADER` antes de la primera corrida real.
+
+**Ni snapshot ni branch-restore de Neon** son rollback aceptable acá: son de la base entera y se llevarían puestos los favoritos, reseñas y pagos posteriores al punto de restore. El daño de tener cupos mal un rato es mucho menor.
 
 ## Comisiones partidas
 

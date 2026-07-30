@@ -1,0 +1,76 @@
+name: vacantes
+
+# Job de alta frecuencia que actualiza SOLO `cursos.vacantes`. El scraper diario
+# (scrape.yml) sigue siendo el dueño de todo lo demás: horarios, aulas,
+# profesores, comisiones y vigencia.
+
+on:
+  # DESCOMENTAR PARA PRENDER EL CRON. Se mergea comentado a propósito: apenas el
+  # archivo está en la rama default el schedule empieza a disparar solo, y las
+  # corridas manuales de verificación tienen que ir antes.
+  #
+  # Cada hora en horario de vigilia: 07:20–23:20 ART (UTC-3), 17 corridas/día.
+  # De madrugada nadie se inscribe y las corridas contra una DB ociosa pagan el
+  # wake completo de Neon (piso de 5 min por scale-to-zero).
+  #
+  # No incluye las 06:00 UTC del scraper diario, así que los dos jobs no pueden
+  # solaparse ni con la deriva típica del cron de Actions.
+  #
+  # schedule:
+  #   - cron: '20 10-23,0-2 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Calcular el diff sin escribir (transacción READ ONLY)'
+        type: boolean
+        default: false
+      limit:
+        description: 'Procesar sólo las primeras N cátedras (vacío = todas)'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+# Group compartido con scrape.yml: en Actions el group es global al repo, no por
+# archivo. El cron ya evita el solape; esto cubre los dispatch manuales.
+concurrency:
+  group: planify-scraper-db
+  cancel-in-progress: false
+
+jobs:
+  vacantes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - run: pip install -r backend/requirements.txt
+
+      - name: Actualizar vacantes
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SCRAPER_DELAY_SECONDS: "0.5"
+          # User-Agent propio para que los logs de la facultad distingan este job
+          # del scraper diario.
+          SCRAPER_USER_AGENT: "OrganizacionHorarios/1.0 vacantes (github actions)"
+          # Vía env y no interpolados en el comando: los inputs no se meten en el
+          # shell.
+          DRY_RUN: ${{ inputs.dry_run }}
+          LIMIT: ${{ inputs.limit }}
+        run: |
+          ARGS=""
+          if [ "$DRY_RUN" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          if [ -n "$LIMIT" ]; then
+            ARGS="$ARGS --limit $LIMIT"
+          fi
+          python -m scraper.vacantes $ARGS
