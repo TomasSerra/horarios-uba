@@ -5,19 +5,14 @@ name: vacantes
 # profesores, comisiones y vigencia.
 
 on:
-  # DESCOMENTAR PARA PRENDER EL CRON. Se mergea comentado a propósito: apenas el
-  # archivo está en la rama default el schedule empieza a disparar solo, y las
-  # corridas manuales de verificación tienen que ir antes.
-  #
   # Cada hora en horario de vigilia: 07:20–23:20 ART (UTC-3), 17 corridas/día.
   # De madrugada nadie se inscribe y las corridas contra una DB ociosa pagan el
   # wake completo de Neon (piso de 5 min por scale-to-zero).
   #
   # No incluye las 06:00 UTC del scraper diario, así que los dos jobs no pueden
   # solaparse ni con la deriva típica del cron de Actions.
-  #
-  # schedule:
-  #   - cron: '20 10-23,0-2 * * *'
+  schedule:
+    - cron: '20 10-23,0-2 * * *'
   workflow_dispatch:
     inputs:
       dry_run:
